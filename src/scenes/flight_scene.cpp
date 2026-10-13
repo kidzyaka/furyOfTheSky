@@ -60,7 +60,7 @@ game::ControlInput FlightScene::scriptedInput(int step) {
     // A sortie that shows every effect for the smoke-test screenshots.
     game::ControlInput in;
     const math::Vec3 here = model_.state().position;
-    if (step == 50 || step == 160 || step == 250 || step == 345 || step == 445 || step == 760 ||
+    if (step == 50 || step == 160 || step == 238 || step == 345 || step == 445 || step == 940 ||
         step == eventShotAt_)
         shotRequest_ = true;
     // 1. Cruise, then a hard afterburner turn: vapor, wingtip trails, flame.
@@ -69,21 +69,22 @@ game::ControlInput FlightScene::scriptedInput(int step) {
         in.pitch = 1.0f;
         in.throttleUp = true;
     }
-    if (step >= 200 && step < 218) in.roll = -1.0f;
-    // 2. Flares.
-    if (step >= 218 && step < 262) in.flares = true;
+    // 2. Flares, in level flight so the fan is easy to judge.
+    if (step == 210) restartAt({here.x, 900.0f, here.z}, 230.0f);
+    if (step >= 220 && step < 262) in.flares = true;
     // 3. Cobra from 430 km/h.
     if (step == 275) restartAt({here.x, 1500.0f, here.z}, 120.0f);
     if (step >= 290 && step < 370) {
         in.psm = true;
         in.pitch = 1.0f;
     }
-    // 4. Through the sound barrier (the boom shot is taken a few steps after it).
+    // 4. Through the sound barrier: transonic cloud at 445, clean supersonic
+    //    flight 2.5 s after Mach 1.
     if (step == 430) restartAt({here.x, 1500.0f, here.z}, 333.0f);
-    if (step >= 430 && step < 700) in.throttleUp = true;
+    if (step >= 430 && step < 880) in.throttleUp = true;
     // 5. Low pass over the waves: spray and shadow. 6. Into the sea.
-    if (step == 700) restartAt({here.x, 14.0f, here.z}, 240.0f);
-    if (step >= 790) in.pitch = -0.6f;
+    if (step == 880) restartAt({here.x, 14.0f, here.z}, 240.0f);
+    if (step >= 970) in.pitch = -0.6f;
     return in;
 }
 
@@ -97,10 +98,9 @@ void FlightScene::stepSimulation(const game::ControlInput& in) {
     camera_.update(s, kStep);
     const game::CameraPose& cam = camera_.pose();
     effects_.update(s, flares_, cam.eye, math::normalize(cam.target - cam.eye), kStep);
-    if (effects_.takeSonicBoom()) {
-        camera_.impulse(0.3f);
-        if (autopilot_) eventShotAt_ = simStep_ + 5;
-    }
+    // Mach 1 itself is uneventful for the pilot (docs/decisions/0020): no
+    // camera kick. The script photographs the clean supersonic flight after it.
+    if (effects_.takeMachOne() && autopilot_) eventShotAt_ = simStep_ + 150;
     if (s.afterburner && !prevAfterburner_) camera_.impulse(0.06f);
     prevAfterburner_ = s.afterburner;
     if (s.crashed && !wasCrashed && autopilot_) eventShotAt_ = simStep_ + 25;
@@ -199,20 +199,18 @@ void FlightScene::render() {
     gfx::drawParticles(effects_.particles(), fx);
     if (!s.crashed) {
         gfx::drawLerxVapor(effects_, s.position, s.orientation, fx);
-        gfx::drawVaporCone(effects_.vaporCone(), s.position, s.pathDir, time_, fx);
+        gfx::drawTransonicVapor(effects_, s.position, s.orientation, fx);
         gfx::drawEngineFlames(effects_.engine(), nozzles, fx);
     }
-    gfx::drawShockRings(effects_, s.position, s.pathDir, fx);
     gfx::drawFlares(flares_, time_, fx);
     gfx::drawSpeedStreaks(effects_, s.pathDir, s.speed, fx);
     gfx::disableFog();
 
-    // --- Screen space: lens flare, whiteout (boom flash, inside a cloud), HUD.
+    // --- Screen space: lens flare, whiteout inside a cloud, HUD.
     sunOnScreen_ = gfx::projectDirection(sun, sunX_, sunY_) && sunX_ >= 0.0f && sunX_ < gfx::kScreenW &&
                    sunY_ >= 0.0f && sunY_ < gfx::kScreenH;
     if (sunOnScreen_) gfx::drawLensFlare(sunX_, sunY_, sunVisibility_, fx);
-    float white = std::max(clouds_.immersion() * 0.85f, effects_.flash() * 0.45f);
-    gfx::drawScreenTint(gfx::abgr(240, 244, 248, static_cast<unsigned>(white * 255.0f)));
+    gfx::drawScreenTint(gfx::abgr(240, 244, 248, static_cast<unsigned>(clouds_.immersion() * 0.85f * 255.0f)));
     gfx::HudCanvas& hud = gfx::hudCanvas();
     drawFlightHud(hud, s, flares_, lastInput_.psm && !s.psm, time_);
     hud.flush(assets_.line);

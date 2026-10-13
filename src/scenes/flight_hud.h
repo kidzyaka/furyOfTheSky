@@ -6,10 +6,10 @@
 
 namespace scenes {
 
-// Head-up display of the flight scene (docs/decisions/0018), in the style of
-// a fighter's holographic HUD: conformal pitch ladder and flight-path marker
-// (projected through the chase camera, so they line up with the real horizon),
-// speed/altitude tapes, heading tape, G, Mach, AoA, flares, mode and warnings.
+// Head-up display of the flight scene (docs/decisions/0018, layout 0021):
+// between a fighter's holographic HUD and Ace Combat - few, large elements.
+// Conformal horizon/ladder and flight-path marker (projected through the chase
+// camera), boxed speed and altitude, heading, Mach and G, stores, warnings.
 // Call after the 3D scene with setCamera() of this frame still current.
 void drawFlightHud(gfx::HudCanvas& canvas, const game::FlightState& s, const game::Countermeasures& cm,
                    bool gOverride, float time);

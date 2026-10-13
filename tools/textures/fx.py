@@ -118,14 +118,13 @@ def flame():
 
 
 def vapor():
-    """Transonic vapor cone, u around, v along (0 = sharp front edge)."""
+    """Transonic condensation, u across the flow, v along it. Only texture
+    (streaks along the flow + mottling): the density profile with its sharp
+    edge at the shock is in the vertex alpha (docs/decisions/0020)."""
     w, h = 64, 32
-    v = (np.arange(h) + 0.5) / h
-    n = periodic_fbm(w, 8, 3, seed=31)[:h]          # w >= h: crop the square noise
-    streak = periodic_fbm(w, 8, 2, seed=33)[0][None, :]
-    vv = v[:, None] * np.ones((1, w))
-    front = smoothstep(0.0, 0.06, vv) * (0.35 + 0.65 * smoothstep(1.0, 0.1, vv))
-    alpha = np.clip(front * (0.85 + 0.7 * streak + 0.3 * (n - 0.5)), 0, 1)
+    streak = periodic_fbm(w, 8, 3, seed=33)[0][None, :]   # varies across the flow only
+    n = periodic_fbm(w, 8, 3, seed=31)[:h]                # w >= h: crop the square noise
+    alpha = np.clip(0.86 + 0.45 * (streak - 0.5) + 0.3 * (n - 0.5), 0.45, 1.0) * np.ones((h, 1))
     write_alpha("vapor", alpha, levels=3)
 
 

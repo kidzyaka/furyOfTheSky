@@ -5,9 +5,11 @@
 namespace game {
 
 namespace {
-// Dispenser on top of the tail "stinger", aircraft body axes (+Z aft).
-constexpr math::Vec3 kDispenser{0.0f, 0.35f, 9.4f};
-constexpr float kDrag = 0.9f;  // 1/s: terminal fall speed g / kDrag ~ 11 m/s
+// Dispenser blocks on top of the rear fuselage between the nozzles (early
+// Su-35S layout; serial aircraft carry them underneath - docs/decisions/0022),
+// right one; the left mirrors X. Body axes, +Z aft.
+constexpr math::Vec3 kDispenser{0.16f, 0.36f, 8.7f};
+constexpr float kDrag = 0.25f;  // 1/s, softened from a real pellet's ~2: docs/decisions/0022
 }  // namespace
 
 void Countermeasures::reset() {
@@ -23,10 +25,12 @@ void Countermeasures::reset() {
 void Countermeasures::release(const FlightState& a) {
     rng_ = rng_ * 1664525u + 1013904223u;
     float jitter = static_cast<float>(rng_ >> 8) * (1.0f / 16777216.0f);
-    // Ejected up and to the side, a little aft: the classic fan of flares.
-    math::Vec3 kick{side_ * (14.0f + 6.0f * jitter), 11.0f + 5.0f * jitter, 6.0f};
+    // Kicked out of the canted blocks sideways and up (cartridge ejection
+    // ~25 m/s): the salvo fans out either side of the tail, in view of the
+    // chase camera, before the drag drops it behind.
+    math::Vec3 kick{side_ * (20.0f + 8.0f * jitter), 11.0f + 4.0f * jitter, 0.0f};
     Flare& f = flares_[next_];
-    f.pos = a.position + a.orientation.rotate(kDispenser);
+    f.pos = a.position + a.orientation.rotate(math::Vec3{side_ * kDispenser.x, kDispenser.y, kDispenser.z});
     f.vel = a.velocity() + a.orientation.rotate(kick);
     f.age = 0.0f;
     f.burning = true;

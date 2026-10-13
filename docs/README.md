@@ -29,6 +29,9 @@
 - [0017 — тепловые ловушки](decisions/0017-countermeasures.md)
 - [0018 — HUD в стиле голографического индикатора](decisions/0018-hud.md)
 - [0019 — освещение и графика: свет самолёта, море, блики, тень](decisions/0019-lighting-graphics.md)
+- [0020 — трансзвуковая конденсация вместо «хлопка», физичный конденсат](decisions/0020-transonic-condensation.md)
+- [0021 — HUD: компоновка между истребительным индикатором и Ace Combat](decisions/0021-hud-layout-v2.md)
+- [0022 — ловушки: место выброса и баллистика](decisions/0022-flare-dispensers-v2.md)
 
 ## Знания о PSP
 - [psp/gotchas.md](psp/gotchas.md) — ловушки железа, GE, прошивки и тулчейна (с пометкой, где проверено)

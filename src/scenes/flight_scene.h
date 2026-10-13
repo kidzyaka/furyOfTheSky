@@ -37,7 +37,7 @@ public:
 private:
     static constexpr float kStep = 1.0f / 60.0f;  // fixed simulation step
     static constexpr int kMaxStepsPerFrame = 5;    // spiral-of-death guard
-    static constexpr int kScriptEnd = 900;
+    static constexpr int kScriptEnd = 1080;
 
     game::ControlInput mapInput(const platform::Pad& pad) const;
     game::ControlInput scriptedInput(int step);
@@ -68,7 +68,7 @@ private:
 
     bool autopilot_ = false;
     bool shotRequest_ = false;
-    int eventShotAt_ = -1;  // script: a shot shortly after the boom / the crash
+    int eventShotAt_ = -1;  // script: a shot after Mach 1 / after the crash
     int simStep_ = 0;
 };
 

@@ -21,7 +21,7 @@ class ChaseCamera {
 public:
     void reset(const FlightState& s);
     void update(const FlightState& s, float dt);
-    // Short kick: sonic boom, afterburner light-up. Amplitude in metres.
+    // Short kick (afterburner light-up). Amplitude in metres.
     void impulse(float amplitude);
     const CameraPose& pose() const { return pose_; }
 

@@ -34,12 +34,10 @@ void drawEngineFlames(const fx::EngineFx& engine, const NozzleFrame nozzles[2], 
 // Condensation puffs over the LERX/wing roots, attached to the airframe.
 void drawLerxVapor(const fx::AircraftEffects& fx, const math::Vec3& pos, const math::Quat& rot,
                    const FxTextures& tex);
-// Transonic "shock collar" around the airframe, aligned with the flight path.
-void drawVaporCone(float intensity, const math::Vec3& pos, const math::Vec3& pathDir, float time,
-                   const FxTextures& tex);
-// Sonic boom: expanding rings around the aircraft.
-void drawShockRings(const fx::AircraftEffects& fx, const math::Vec3& pos, const math::Vec3& pathDir,
-                    const FxTextures& tex);
+// Transonic condensation (docs/decisions/0020): a collar around the fuselage
+// and sheets on the wing tops, each ending sharply at its shock.
+void drawTransonicVapor(const fx::AircraftEffects& fx, const math::Vec3& pos, const math::Quat& rot,
+                        const FxTextures& tex);
 // Ribbons: wingtip vortices, contrails, flare smoke.
 void drawTrails(const fx::Trail* const* trails, int count, const FxTextures& tex);
 void drawParticles(const fx::ParticleSystem& particles, const FxTextures& tex);
@@ -49,7 +47,7 @@ void drawSpeedStreaks(const fx::AircraftEffects& fx, const math::Vec3& pathDir, 
 void drawShadow(const math::Vec3& pos, const math::Quat& rot, const math::Vec3& dirToSun, const FxTextures& tex);
 
 // Screen-space (2D) overlays.
-void drawScreenTint(uint32_t abgr);  // full-screen alpha-blended quad (boom flash, inside a cloud)
+void drawScreenTint(uint32_t abgr);  // full-screen alpha-blended quad (inside a cloud, pause)
 void drawLensFlare(float sunX, float sunY, float visibility, const FxTextures& tex);
 
 }  // namespace gfx

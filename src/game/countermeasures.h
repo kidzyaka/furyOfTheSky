@@ -10,13 +10,17 @@ namespace game {
 struct Flare {
     math::Vec3 pos, vel;   // world
     float age = 0.0f;      // s since ejection
-    bool burning = false;
+    bool burning = false;  // in flight (ejected and not burnt out)
+
+    // The pyrotechnic pellet ignites a moment after the cartridge kicks it out,
+    // a few metres clear of the airframe: only then is it hot and visible.
+    bool lit() const;
 };
 
-// Flare dispenser (docs/decisions/0017). Holding the button fires salvos of
-// kSalvo flares, alternating left/right, from the tail; flares inherit the
-// aircraft's velocity plus an ejection kick, then high drag makes them fall
-// behind and sink. Deterministic (own LCG) like the rest of the simulation.
+// Flare dispensers (docs/decisions/0017, 0022). Holding the button fires salvos of
+// kSalvo flares, alternating between two blocks on top of the rear fuselage,
+// kicked up and outwards; flares inherit the aircraft's velocity, then drag
+// makes them fall behind. Deterministic (own LCG) like the rest of the sim.
 class Countermeasures {
 public:
     static constexpr int kMaxFlares = 24;  // burning at once
@@ -25,6 +29,7 @@ public:
     static constexpr float kInterval = 0.09f;  // s between flares in a salvo
     static constexpr float kCooldown = 0.6f;   // s between salvos
     static constexpr float kBurnTime = 4.0f;   // s
+    static constexpr float kIgnition = 0.05f;  // s from ejection to ignition (~1.5 m out)
 
     void reset();
     void update(const FlightState& aircraft, bool trigger, float dt);
@@ -46,5 +51,7 @@ private:
     int justReleased_ = -1;
     uint32_t rng_ = 0xF1A2E5u;
 };
+
+inline bool Flare::lit() const { return burning && age >= Countermeasures::kIgnition; }
 
 }  // namespace game

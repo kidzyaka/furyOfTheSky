@@ -222,40 +222,103 @@ void drawLerxVapor(const fx::AircraftEffects& fx, const Vec3& pos, const Quat& r
     end();
 }
 
-void drawVaporCone(float intensity, const Vec3& pos, const Vec3& pathDir, float time, const FxTextures& tex) {
-    if (intensity < 0.02f) return;
-    // Prandtl-Glauert "shock collar": a bell around the airframe from the
-    // canopy aft, crisp at the front edge (texture v = 0), fading rearwards.
-    const float pulse = 1.0f + 0.04f * std::sin(time * 13.0f);
-    const float z[5] = {-3.8f, -2.2f, 0.0f, 2.8f, 6.0f};
-    const float r[5] = {1.3f * pulse, 2.8f * pulse, 4.0f * pulse, 5.0f * pulse, 5.6f * pulse};
-    const float tv[5] = {0.0f, 0.2f, 0.45f, 0.72f, 1.0f};
-    constexpr int kSeg = 16;
-    FxVertex* v = alloc(kSeg * 4 * 6);
-    FxVertex* w = lathe(v, pos - camera().eye, -pathDir, z, r, tv, kSeg, 3.0f, time * 0.15f,
-                        abgr(240, 244, 250, byte(intensity)));
-    begin(false, *tex.vapor, true);
-    sceGuTexWrap(GU_REPEAT, GU_CLAMP);
-    sceGumDrawArray(GU_TRIANGLES, kFx3D, static_cast<int>(w - v), nullptr, v);
-    end();
-}
+void drawTransonicVapor(const fx::AircraftEffects& fx, const Vec3& pos, const Quat& rot, const FxTextures& tex) {
+    const float k = fx.transonic();
+    if (k < 0.02f) return;
+    const fx::AttachPoints& pts = fx.points();
+    const Vec3 eye = camera().eye;
+    // The shock "breathes" (transonic buffet): a small, slow wobble of its
+    // position - not flicker, the PSP-3000 LCD smears that.
+    const float wobble = 0.03f * std::sin(fx.time() * 11.0f) + 0.02f * std::sin(fx.time() * 17.0f + 1.0f);
+    const float shock = fx.shockPosition() + wobble;
+    const Vec3 right = rot.rotate(math::kRight), up = rot.rotate(math::kUp), aft = rot.rotate(Vec3{0, 0, 1});
+    auto body = [&](float x, float y, float z) { return pos + right * x + up * y + aft * z - eye; };
 
-void drawShockRings(const fx::AircraftEffects& fx, const Vec3& pos, const Vec3& pathDir, const FxTextures& tex) {
-    FxVertex* v = alloc(fx::AircraftEffects::kRings * 6);
+    // --- 1. Shock collar around the fuselage: starts thin at the canopy,
+    // densest just ahead of the terminating shock, then ends abruptly. The
+    // density profile lives in the vertex alpha; the texture adds streaks.
+    constexpr int kSeg = 16, kRings = 6;
+    const float zFront = pts.canopyZ;
+    // The rim moves aft as Mach grows; past M 1 (shock > 1) it keeps sliding
+    // off the back while the cloud thins out - it never balloons.
+    const float zShock = zFront + 2.5f + 7.0f * math::clamp(shock, 0.0f, 1.0f) + 3.0f * math::clamp(shock - 1.0f, 0.0f, 1.0f);
+    const float rShock = 2.2f + 3.1f * math::clamp(shock, 0.0f, 1.0f);
+    const float zr[kRings] = {zFront, zFront + (zShock - zFront) * 0.35f, zFront + (zShock - zFront) * 0.7f,
+                              zShock - 0.35f, zShock, zShock + 0.12f};
+    const float rr[kRings] = {0.9f, 0.9f + (rShock - 0.9f) * 0.5f, 0.9f + (rShock - 0.9f) * 0.85f,
+                              rShock * 0.98f, rShock, rShock * 1.01f};
+    const float ar[kRings] = {0.0f, 0.35f, 0.75f, 1.0f, 1.0f, 0.0f};
+    const float vr[kRings] = {0.0f, 0.3f, 0.6f, 0.9f, 0.97f, 1.0f};
+    const float layers[2] = {1.0f, 0.62f};  // outer skin + an inner one for volume
+    FxVertex* v = alloc(2 * kSeg * (kRings - 1) * 6 + 4 * 3 * 3 * 6);
     FxVertex* w = v;
-    Vec3 p1, p2;
-    perpendiculars(pathDir, p1, p2);
-    for (int i = 0; i < fx::AircraftEffects::kRings; ++i) {
-        const fx::ShockRing& ring = fx.ring(i);
-        if (ring.age < 0.0f) continue;
-        float t = ring.age / fx::AircraftEffects::kRingLife;
-        float radius = 4.0f + 30.0f * std::pow(t, 0.6f);
-        // A little aft of the centre of gravity, where the collar forms.
-        w = quad(w, pos - pathDir * 2.0f - camera().eye, p1 * radius, p2 * radius,
-                 abgr(245, 248, 252, byte(0.9f * std::pow(1.0f - t, 1.4f))));
+    for (float layer : layers) {
+        for (int ring = 0; ring + 1 < kRings; ++ring) {
+            for (int seg = 0; seg < kSeg; ++seg) {
+                Vec3 p[4];
+                uint32_t c[4];
+                const int ri[4] = {ring, ring, ring + 1, ring + 1}, si[4] = {seg, seg + 1, seg + 1, seg};
+                for (int i = 0; i < 4; ++i) {
+                    float a = si[i] * (2.0f * math::kPi / kSeg);
+                    float ca = std::cos(a), sa = std::sin(a);
+                    float r = rr[ri[i]] * layer;
+                    p[i] = body(ca * r, 0.15f + sa * r * 0.85f, zr[ri[i]]);
+                    // Sunlit top, greyer underside.
+                    float shade = 0.84f + 0.16f * sa;
+                    unsigned g = byte(shade);
+                    c[i] = abgr(g, g, std::min(255u, g + 6u), byte(ar[ri[i]] * k * (layer < 1.0f ? 0.7f : 1.0f)));
+                }
+                float u0 = 3.0f * seg / kSeg, u1 = 3.0f * (seg + 1) / kSeg;
+                float v0 = vr[ring], v1 = vr[ring + 1];
+                *w++ = {u0, v0, c[0], p[0].x, p[0].y, p[0].z};
+                *w++ = {u1, v0, c[1], p[1].x, p[1].y, p[1].z};
+                *w++ = {u1, v1, c[2], p[2].x, p[2].y, p[2].z};
+                *w++ = {u0, v0, c[0], p[0].x, p[0].y, p[0].z};
+                *w++ = {u1, v1, c[2], p[2].x, p[2].y, p[2].z};
+                *w++ = {u0, v1, c[3], p[3].x, p[3].y, p[3].z};
+            }
+        }
     }
-    if (w == v) return;
-    begin(false, *tex.ring);
+
+    // --- 2. Condensation sheets on the wing tops, ending at the wing shock
+    // (from ~45% chord at M 0.88 to the trailing edge at M 1). From the chase
+    // camera this is what reads best.
+    const float fShock = 0.45f + 0.52f * math::clamp(shock, 0.0f, 1.0f);
+    const float fRows[4] = {0.10f, fShock - 0.10f, fShock, fShock + 0.03f};
+    const float aRows[4] = {0.0f, 1.0f, 1.0f, 0.0f};
+    const float sCols[4] = {0.12f, 0.4f, 0.68f, 0.9f};
+    // Two layers (just above the skin and a little higher) give the sheet body.
+    for (int sheet = 0; sheet < 4; ++sheet) {
+        const int side = sheet & 1;
+        const float lift = sheet < 2 ? 0.12f : 0.4f, layerAlpha = sheet < 2 ? 1.0f : 0.55f;
+        float mirror = side ? -1.0f : 1.0f;
+        auto at = [&](float sp, float f) {
+            const fx::WingSpan &a = pts.wingRoot, &b = pts.wingTip;
+            float x = a.x + (b.x - a.x) * sp, y = a.y + (b.y - a.y) * sp + lift;
+            float zle = a.zLE + (b.zLE - a.zLE) * sp, chord = a.chord + (b.chord - a.chord) * sp;
+            return body(mirror * x, y, zle + chord * f);
+        };
+        for (int row = 0; row < 3; ++row) {
+            for (int col = 0; col < 3; ++col) {
+                Vec3 p00 = at(sCols[col], fRows[row]), p10 = at(sCols[col + 1], fRows[row]);
+                Vec3 p11 = at(sCols[col + 1], fRows[row + 1]), p01 = at(sCols[col], fRows[row + 1]);
+                // Thinner towards the tip, where the shock is weaker.
+                float t0 = (1.0f - 0.35f * sCols[col]) * layerAlpha, t1 = (1.0f - 0.35f * sCols[col + 1]) * layerAlpha;
+                uint32_t c00 = abgr(244, 246, 250, byte(aRows[row] * k * t0));
+                uint32_t c10 = abgr(244, 246, 250, byte(aRows[row] * k * t1));
+                uint32_t c11 = abgr(244, 246, 250, byte(aRows[row + 1] * k * t1));
+                uint32_t c01 = abgr(244, 246, 250, byte(aRows[row + 1] * k * t0));
+                float u0 = sCols[col] * 2.0f, u1 = sCols[col + 1] * 2.0f, v0 = fRows[row], v1 = fRows[row + 1];
+                *w++ = {u0, v0, c00, p00.x, p00.y, p00.z};
+                *w++ = {u1, v0, c10, p10.x, p10.y, p10.z};
+                *w++ = {u1, v1, c11, p11.x, p11.y, p11.z};
+                *w++ = {u0, v0, c00, p00.x, p00.y, p00.z};
+                *w++ = {u1, v1, c11, p11.x, p11.y, p11.z};
+                *w++ = {u0, v1, c01, p01.x, p01.y, p01.z};
+            }
+        }
+    }
+    begin(false, *tex.vapor, true);
     sceGumDrawArray(GU_TRIANGLES, kFx3D, static_cast<int>(w - v), nullptr, v);
     end();
 }
@@ -357,12 +420,12 @@ void drawFlares(const game::Countermeasures& cm, float time, const FxTextures& t
     const Vec3& eye = camera().eye;
     for (int i = 0; i < game::Countermeasures::kMaxFlares; ++i) {
         const game::Flare& f = cm.flare(i);
-        if (!f.burning) continue;
+        if (!f.lit()) continue;
         float h = std::sin(time * 41.0f + i * 12.9f) * 43758.5f;
         float flick = 0.8f + 0.4f * (h - std::floor(h));
         float fade = 1.0f - smoothstep(3.3f, 4.0f, f.age);
         Vec3 rel = f.pos - eye;
-        w = sprite(w, rel, 4.5f * fade, abgr(255, 196, 140, byte(0.35f * fade)));  // halo
+        w = sprite(w, rel, 3.2f * fade, abgr(255, 196, 140, byte(0.3f * fade)));  // halo
         w = sprite(w, rel, 1.1f * flick * fade + 0.2f, abgr(255, 250, 236, 255));  // core
     }
     if (w == v) return;

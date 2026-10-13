@@ -18,13 +18,16 @@ const AttachPoints kSu35SPoints = {
      {3.20f, 0.40f, 1.1f}, {4.30f, 0.30f, 2.2f}, {5.40f, 0.20f, 3.2f}},
     /*vaporSize*/ {1.1f, 1.5f, 1.8f, 2.0f, 2.0f, 1.8f, 1.5f},
     /*vaporOnset*/ {0.0f, 0.0f, 0.05f, 0.15f, 0.3f, 0.5f, 0.65f},
+    /*wingRoot*/ {0.90f, 0.24f, -1.58f, 5.98f},
+    /*wingTip*/ {7.05f, -0.09f, 3.96f, 1.60f},
+    /*canopyZ*/ -5.5f,
 };
 
 void AircraftEffects::reset() {
     engine_ = EngineFx{};
-    abLevel_ = vapor_ = cone_ = flash_ = 0.0f;
-    prevAb_ = boom_ = wasCrashed_ = false;
-    prevMach_ = boomCooldown_ = sprayAcc_ = time_ = 0.0f;
+    abLevel_ = vapor_ = transonic_ = shock_ = 0.0f;
+    prevAb_ = machOne_ = wasCrashed_ = false;
+    prevMach_ = sprayAcc_ = time_ = 0.0f;
     particles_.clear();
     for (int i = 0; i < 2; ++i) {
         tips_[i].clear();
@@ -45,7 +48,6 @@ void AircraftEffects::reset() {
         t.growth = 6.0f;
         t.color = rgba(214, 214, 208);
     }
-    for (ShockRing& r : rings_) r.age = -1.0f;
     streaksLive_ = false;
     streakAlpha_ = 0.0f;
 }
@@ -71,49 +73,47 @@ void AircraftEffects::update(const game::FlightState& s, const game::Countermeas
     engine_.heat += ((alive ? s.throttle : 0.0f) - engine_.heat) * approach(2.0f, dt);
     engine_.flicker = rng_.next();
 
-    // --- Condensation: needs airflow; appears with G and with AoA.
-    const float flow = alive ? smoothstep(40.0f, 110.0f, v) : 0.0f;
-    const float aoa = std::fabs(s.alpha);
-    float vaporTarget = flow * std::max(smoothstep(4.5f, 9.5f, s.loadFactor), smoothstep(0.22f, 0.6f, aoa));
+    // --- Condensation (docs/decisions/0020): water condenses where the flow
+    // over the airframe is accelerated and its pressure (and temperature)
+    // drops below the dew point. The suction that does it is what makes the
+    // lift, so it follows the aerodynamic load (G) - not the angle of attack:
+    // at 200 km/h even 60 deg of AoA makes little lift and no cloud. Speed is
+    // gated too (dynamic pressure), and humid low air condenses far more easily.
+    const float humid = 1.0f - 0.8f * smoothstep(3000.0f, 9000.0f, s.position.y);
+    const float q = alive ? smoothstep(85.0f, 140.0f, v) : 0.0f;  // ~300..500 km/h
+    float vaporTarget = q * humid * smoothstep(4.5f, 9.0f, s.loadFactor);
     vapor_ += (vaporTarget - vapor_) * approach(8.0f, dt);
 
-    float tip = flow * std::max(smoothstep(3.0f, 7.5f, s.loadFactor), smoothstep(0.2f, 0.5f, aoa));
+    // Wingtip vortex cores: the pressure drop scales with lift (circulation) too.
+    float tip = smoothstep(80.0f, 130.0f, v) * humid * smoothstep(3.5f, 8.0f, s.loadFactor) * (alive ? 1.0f : 0.0f);
     // Contrails only high up, where the air is cold enough (arcade threshold).
-    float contrail = flow * smoothstep(4000.0f, 5500.0f, s.position.y);
+    float contrail = (alive ? smoothstep(40.0f, 110.0f, v) : 0.0f) * smoothstep(4000.0f, 5500.0f, s.position.y);
     for (int side = 0; side < 2; ++side) {
         tips_[side].update(attach(s, points_.wingtip, side), tip * 0.7f, 0.25f, dt);
         Vec3 exit = attach(s, points_.nozzleExit, side) + s.pathDir * -6.0f;  // condenses behind the jet
         contrails_[side].update(exit, contrail * 0.55f, 0.7f, dt);
     }
 
-    // --- Transonic vapor cone and the boom.
-    float m = s.mach;
-    float coneTarget = alive ? smoothstep(0.93f, 0.99f, m) * (1.0f - smoothstep(1.01f, 1.08f, m)) : 0.0f;
-    cone_ += (coneTarget - cone_) * approach(10.0f, dt);
-    boomCooldown_ -= dt;
-    if (alive && prevMach_ < 1.0f && m >= 1.0f && boomCooldown_ <= 0.0f) boom(s);
+    // --- Transonic condensation. Around M 0.9 the flow over the canopy and the
+    // wings goes locally supersonic and ends in a shock; between the expansion
+    // and the shock it is cold enough to condense, at the shock it re-heats and
+    // the cloud ends abruptly. As M -> 1 the shocks slide aft to the trailing
+    // edges; past ~M 1.03 the flow is supersonic everywhere and the cloud is gone.
+    // There is no flash or visible ring at Mach 1.
+    const float m = s.mach;
+    float transonicTarget = alive ? humid * smoothstep(0.88f, 0.94f, m) * (1.0f - smoothstep(1.0f, 1.035f, m)) : 0.0f;
+    float shockTarget = smoothstep(0.88f, 1.0f, m) + 1.5f * smoothstep(1.0f, 1.035f, m);
+    transonic_ += (transonicTarget - transonic_) * approach(6.0f, dt);
+    shock_ += (shockTarget - shock_) * approach(6.0f, dt);
+    if (alive && prevMach_ < 1.0f && m >= 1.0f) machOne_ = true;
     prevMach_ = m;
-    flash_ *= std::exp(-7.0f * dt);
-    for (ShockRing& r : rings_)
-        if (r.age >= 0.0f && (r.age += dt) > kRingLife) r.age = -1.0f;
 
-    // --- Flares: a smoke ribbon per slot, a pop at ejection.
+    // --- Flares: a smoke ribbon per slot, from the moment the flare ignites
+    // (a few metres clear of the airframe, as the real cartridge does).
     for (int i = 0; i < game::Countermeasures::kMaxFlares; ++i) {
         const game::Flare& f = cm.flare(i);
-        float burn = f.burning ? 1.0f - smoothstep(3.2f, 4.0f, f.age) : 0.0f;
-        flareTrails_[i].update(f.pos, burn * 0.55f, 0.45f, dt);
-    }
-    if (cm.justReleased() >= 0) {
-        if (Particle* p = particles_.spawn()) {
-            p->pos = cm.flare(cm.justReleased()).pos;
-            p->vel = s.velocity();
-            p->life = 0.25f;
-            p->size0 = 1.2f;
-            p->size1 = 3.0f;
-            p->color0 = rgba(255, 240, 200, 255);
-            p->color1 = rgba(255, 180, 90, 0);
-            p->drag = 3.0f;
-        }
+        float burn = f.lit() ? 1.0f - smoothstep(3.2f, game::Countermeasures::kBurnTime, f.age) : 0.0f;
+        flareTrails_[i].update(f.pos, burn * 0.7f, 0.6f, dt);
     }
 
     if (alive) spray(s, dt);
@@ -121,37 +121,6 @@ void AircraftEffects::update(const game::FlightState& s, const game::Countermeas
     wasCrashed_ = s.crashed;
     updateStreaks(s, eye, camForward);
     particles_.update(dt);
-}
-
-void AircraftEffects::boom(const game::FlightState& s) {
-    boom_ = true;
-    boomCooldown_ = 2.5f;
-    flash_ = 1.0f;
-    for (ShockRing& r : rings_) {
-        if (r.age < 0.0f) {
-            r.age = 0.0f;
-            break;
-        }
-    }
-    // A puff of condensation left hanging in the air where the shock passed.
-    Vec3 right = s.orientation.right(), up = s.orientation.up();
-    for (int i = 0; i < 10; ++i) {
-        Particle* p = particles_.spawn();
-        if (!p) break;
-        float a = i * (2.0f * math::kPi / 10.0f);
-        Vec3 radial = right * std::cos(a) + up * std::sin(a);
-        p->pos = s.position + radial * 3.0f;
-        // Mostly carried along, so the burst stays around the aircraft for a moment.
-        p->vel = s.velocity() * 0.85f + radial * 18.0f;
-        p->life = rng_.range(0.9f, 1.4f);
-        p->size0 = 2.5f;
-        p->size1 = 7.0f;
-        p->color0 = rgba(242, 246, 250, 150);
-        p->color1 = rgba(242, 246, 250, 0);
-        p->drag = 2.5f;
-        p->sprite = Sprite::Smoke;
-        p->blend = Blend::Alpha;
-    }
 }
 
 void AircraftEffects::explode(const game::FlightState& s) {
