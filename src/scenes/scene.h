@@ -16,11 +16,11 @@ struct Assets {
     gfx::Texture liveries[kLiveryCount];
     gfx::Texture ocean, cloud, sun;
     // Effects and HUD (tools/textures/fx.py).
-    gfx::Texture glow, smoke, flame, vapor, ring, glint, shadow, line, ribbon, waves;
+    gfx::Texture glow, smoke, flame, ring, glint, shadow, line, ribbon, waves;
     const char* error = nullptr;  // path of the first file that failed
 
     bool load();
-    gfx::FxTextures fx() const { return {&glow, &smoke, &flame, &vapor, &ring, &ribbon, &shadow}; }
+    gfx::FxTextures fx() const { return {&glow, &smoke, &flame, &ring, &ribbon, &shadow}; }
 };
 
 // Player options edited in the pause menu.

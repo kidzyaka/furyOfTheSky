@@ -1,4 +1,4 @@
-"""Effect textures: glow, smoke, afterburner flame, vapor, ring, glint,
+"""Effect textures: glow, smoke, afterburner flame, ring, glint,
 aircraft shadow, HUD stroke and trail profiles, ocean wave highlights (numpy only).
 
 Usage (from the project root):  python3 tools/textures/fx.py
@@ -117,17 +117,6 @@ def flame():
     write_ramp("flame", val, ramp, levels=3)
 
 
-def vapor():
-    """Transonic condensation, u across the flow, v along it. Only texture
-    (streaks along the flow + mottling): the density profile with its sharp
-    edge at the shock is in the vertex alpha (docs/decisions/0020)."""
-    w, h = 64, 32
-    streak = periodic_fbm(w, 8, 3, seed=33)[0][None, :]   # varies across the flow only
-    n = periodic_fbm(w, 8, 3, seed=31)[:h]                # w >= h: crop the square noise
-    alpha = np.clip(0.86 + 0.45 * (streak - 0.5) + 0.3 * (n - 0.5), 0.45, 1.0) * np.ones((h, 1))
-    write_alpha("vapor", alpha, levels=3)
-
-
 def ring():
     """Soft annulus: shock ring of the sonic boom, lens-flare halo."""
     x, y = grid(64, 64)
@@ -206,7 +195,7 @@ def waves():
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(PREVIEW, exist_ok=True)
-    for make in (glow, smoke, flame, vapor, ring, glint, shadow, line, ribbon, waves):
+    for make in (glow, smoke, flame, ring, glint, shadow, line, ribbon, waves):
         make()
-    for name in ("glow", "smoke", "flame", "vapor", "ring", "glint", "shadow", "line", "ribbon", "waves"):
+    for name in ("glow", "smoke", "flame", "ring", "glint", "shadow", "line", "ribbon", "waves"):
         print(f"[fx] fx_{name}.ftx {os.path.getsize(os.path.join(OUT, f'fx_{name}.ftx'))} bytes")

@@ -32,6 +32,7 @@
 - [0020 — трансзвуковая конденсация вместо «хлопка», физичный конденсат](decisions/0020-transonic-condensation.md)
 - [0021 — HUD: компоновка между истребительным индикатором и Ace Combat](decisions/0021-hud-layout-v2.md)
 - [0022 — ловушки: место выброса и баллистика](decisions/0022-flare-dispensers-v2.md)
+- [0023 — трансзвуковое облако из клубов конденсата](decisions/0023-transonic-cloud-puffs.md)
 
 ## Знания о PSP
 - [psp/gotchas.md](psp/gotchas.md) — ловушки железа, GE, прошивки и тулчейна (с пометкой, где проверено)

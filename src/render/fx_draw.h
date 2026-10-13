@@ -18,7 +18,6 @@ struct FxTextures {
     const Texture* glow;
     const Texture* smoke;
     const Texture* flame;
-    const Texture* vapor;
     const Texture* ring;
     const Texture* ribbon;
     const Texture* shadow;

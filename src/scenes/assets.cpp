@@ -16,7 +16,6 @@ bool Assets::load() {
         {&glow, "assets/textures/fx_glow.ftx"},
         {&smoke, "assets/textures/fx_smoke.ftx"},
         {&flame, "assets/textures/fx_flame.ftx"},
-        {&vapor, "assets/textures/fx_vapor.ftx"},
         {&ring, "assets/textures/fx_ring.ftx"},
         {&glint, "assets/textures/fx_glint.ftx"},
         {&shadow, "assets/textures/fx_shadow.ftx"},

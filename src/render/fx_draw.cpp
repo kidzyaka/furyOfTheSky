@@ -185,16 +185,40 @@ void drawEngineFlames(const fx::EngineFx& e, const NozzleFrame nozzles[2], const
     }
 }
 
+namespace {
+
+// Soft condensation puffs (smoke texture, alpha), drawn far to near. The
+// same look for the LERX vapor and the transonic cloud.
+struct Puff {
+    Vec3 rel;  // camera-relative
+    float depth, size;
+    uint32_t color;
+};
+
+void drawPuffs(Puff* puffs, int n, const Texture& smoke) {
+    if (n == 0) return;
+    // Insertion sort: a few dozen items (and std::sort trips GCC 15's
+    // -Warray-bounds on small fixed arrays, docs/psp/gotchas.md #25).
+    for (int i = 1; i < n; ++i)
+        for (int j = i; j > 0 && puffs[j].depth > puffs[j - 1].depth; --j) std::swap(puffs[j], puffs[j - 1]);
+    FxVertex* v = alloc(n * 2);
+    FxVertex* w = v;
+    for (int i = 0; i < n; ++i) w = sprite(w, puffs[i].rel, puffs[i].size, puffs[i].color);
+    begin(false, smoke);
+    sceGumDrawArray(GU_SPRITES, kFx3D, n * 2, nullptr, v);
+    end();
+}
+
+// Slow breathing, not flicker: fast changes smear on the PSP-3000 LCD.
+float breathe(float time, float phase) { return 0.8f + 0.2f * std::sin(time * 7.0f + phase); }
+
+}  // namespace
+
 void drawLerxVapor(const fx::AircraftEffects& fx, const Vec3& pos, const Quat& rot, const FxTextures& tex) {
     const float k = fx.vapor();
     if (k < 0.02f) return;
     const fx::AttachPoints& pts = fx.points();
     const CameraBasis& cam = camera();
-    struct Puff {
-        Vec3 rel;
-        float depth, size;
-        uint32_t color;
-    };
     Puff puffs[2 * fx::AttachPoints::kVaporPuffs];
     int n = 0;
     for (int side = 0; side < 2; ++side) {
@@ -204,123 +228,76 @@ void drawLerxVapor(const fx::AircraftEffects& fx, const Vec3& pos, const Quat& r
             Vec3 b = pts.vapor[i];
             if (side) b.x = -b.x;
             Vec3 rel = pos + rot.rotate(b) - cam.eye;
-            // Slow breathing, not flicker: fast changes smear on the PSP-3000 LCD.
-            float wob = 0.8f + 0.2f * std::sin(fx.time() * 7.0f + i * 1.7f + side * 0.9f);
             puffs[n++] = {rel, math::dot(rel, cam.forward), pts.vaporSize[i] * (0.85f + 0.3f * k),
-                          abgr(240, 244, 250, byte(0.6f * on * wob))};
+                          abgr(240, 244, 250, byte(0.6f * on * breathe(fx.time(), i * 1.7f + side * 0.9f)))};
         }
     }
-    // Far to near. Insertion sort: 14 items (and std::sort trips GCC 15's
-    // -Warray-bounds on a fixed array this small).
-    for (int i = 1; i < n; ++i)
-        for (int j = i; j > 0 && puffs[j].depth > puffs[j - 1].depth; --j) std::swap(puffs[j], puffs[j - 1]);
-    FxVertex* v = alloc(n * 2);
-    FxVertex* w = v;
-    for (int i = 0; i < n; ++i) w = sprite(w, puffs[i].rel, puffs[i].size, puffs[i].color);
-    begin(false, *tex.smoke);
-    sceGumDrawArray(GU_SPRITES, kFx3D, n * 2, nullptr, v);
-    end();
+    drawPuffs(puffs, n, *tex.smoke);
 }
 
 void drawTransonicVapor(const fx::AircraftEffects& fx, const Vec3& pos, const Quat& rot, const FxTextures& tex) {
     const float k = fx.transonic();
     if (k < 0.02f) return;
     const fx::AttachPoints& pts = fx.points();
-    const Vec3 eye = camera().eye;
-    // The shock "breathes" (transonic buffet): a small, slow wobble of its
-    // position - not flicker, the PSP-3000 LCD smears that.
-    const float wobble = 0.03f * std::sin(fx.time() * 11.0f) + 0.02f * std::sin(fx.time() * 17.0f + 1.0f);
-    const float shock = fx.shockPosition() + wobble;
-    const Vec3 right = rot.rotate(math::kRight), up = rot.rotate(math::kUp), aft = rot.rotate(Vec3{0, 0, 1});
-    auto body = [&](float x, float y, float z) { return pos + right * x + up * y + aft * z - eye; };
+    const CameraBasis& cam = camera();
+    const float time = fx.time();
+    // The shock "breathes" (transonic buffet): a small, slow wobble.
+    const float shock = fx.shockPosition() + 0.03f * std::sin(time * 11.0f) + 0.02f * std::sin(time * 17.0f + 1.0f);
+    const float s1 = math::clamp(shock, 0.0f, 1.0f), past = math::clamp(shock - 1.0f, 0.0f, 1.0f);
+    auto body = [&](float x, float y, float z) { return pos + rot.rotate(Vec3{x, y, z}) - cam.eye; };
 
-    // --- 1. Shock collar around the fuselage: starts thin at the canopy,
-    // densest just ahead of the terminating shock, then ends abruptly. The
-    // density profile lives in the vertex alpha; the texture adds streaks.
-    constexpr int kSeg = 16, kRings = 6;
-    const float zFront = pts.canopyZ;
-    // The rim moves aft as Mach grows; past M 1 (shock > 1) it keeps sliding
-    // off the back while the cloud thins out - it never balloons.
-    const float zShock = zFront + 2.5f + 7.0f * math::clamp(shock, 0.0f, 1.0f) + 3.0f * math::clamp(shock - 1.0f, 0.0f, 1.0f);
-    const float rShock = 2.2f + 3.1f * math::clamp(shock, 0.0f, 1.0f);
-    const float zr[kRings] = {zFront, zFront + (zShock - zFront) * 0.35f, zFront + (zShock - zFront) * 0.7f,
-                              zShock - 0.35f, zShock, zShock + 0.12f};
-    const float rr[kRings] = {0.9f, 0.9f + (rShock - 0.9f) * 0.5f, 0.9f + (rShock - 0.9f) * 0.85f,
-                              rShock * 0.98f, rShock, rShock * 1.01f};
-    const float ar[kRings] = {0.0f, 0.35f, 0.75f, 1.0f, 1.0f, 0.0f};
-    const float vr[kRings] = {0.0f, 0.3f, 0.6f, 0.9f, 0.97f, 1.0f};
-    const float layers[2] = {1.0f, 0.62f};  // outer skin + an inner one for volume
-    FxVertex* v = alloc(2 * kSeg * (kRings - 1) * 6 + 4 * 3 * 3 * 6);
-    FxVertex* w = v;
-    for (float layer : layers) {
-        for (int ring = 0; ring + 1 < kRings; ++ring) {
-            for (int seg = 0; seg < kSeg; ++seg) {
-                Vec3 p[4];
-                uint32_t c[4];
-                const int ri[4] = {ring, ring, ring + 1, ring + 1}, si[4] = {seg, seg + 1, seg + 1, seg};
-                for (int i = 0; i < 4; ++i) {
-                    float a = si[i] * (2.0f * math::kPi / kSeg);
-                    float ca = std::cos(a), sa = std::sin(a);
-                    float r = rr[ri[i]] * layer;
-                    p[i] = body(ca * r, 0.15f + sa * r * 0.85f, zr[ri[i]]);
-                    // Sunlit top, greyer underside.
-                    float shade = 0.84f + 0.16f * sa;
-                    unsigned g = byte(shade);
-                    c[i] = abgr(g, g, std::min(255u, g + 6u), byte(ar[ri[i]] * k * (layer < 1.0f ? 0.7f : 1.0f)));
-                }
-                float u0 = 3.0f * seg / kSeg, u1 = 3.0f * (seg + 1) / kSeg;
-                float v0 = vr[ring], v1 = vr[ring + 1];
-                *w++ = {u0, v0, c[0], p[0].x, p[0].y, p[0].z};
-                *w++ = {u1, v0, c[1], p[1].x, p[1].y, p[1].z};
-                *w++ = {u1, v1, c[2], p[2].x, p[2].y, p[2].z};
-                *w++ = {u0, v0, c[0], p[0].x, p[0].y, p[0].z};
-                *w++ = {u1, v1, c[2], p[2].x, p[2].y, p[2].z};
-                *w++ = {u0, v1, c[3], p[3].x, p[3].y, p[3].z};
-            }
+    constexpr int kRings = 5;
+    const int counts[kRings] = {6, 8, 10, 13, 16};
+    Puff puffs[6 + 8 + 10 + 13 + 16 + 2 * 4 * 2];
+    int n = 0;
+
+    // --- Collar: rings of puffs around the fuselage, sparse and small behind
+    // the canopy, densest at the terminating shock - and nothing behind it, so
+    // the cloud ends there. The rim slides aft as Mach grows, then off the back.
+    const float zFront = pts.canopyZ + 0.8f;
+    const float zShock = pts.canopyZ + 2.5f + 7.0f * s1 + 3.0f * past;
+    const float rShock = 2.3f + 2.7f * s1;
+    const float ringT[kRings] = {0.2f, 0.45f, 0.7f, 0.88f, 1.0f};
+    const float ringAlpha[kRings] = {0.25f, 0.42f, 0.6f, 0.78f, 0.9f};
+    for (int ring = 0; ring < kRings; ++ring) {
+        const float t = ringT[ring];
+        const float z = zFront + (zShock - zFront) * t;
+        const float r = 1.0f + (rShock - 1.0f) * std::pow(t, 0.8f);
+        const float size = (0.9f + 1.4f * t) * (0.9f + 0.2f * k);
+        for (int i = 0; i < counts[ring]; ++i) {
+            float a = (i + 0.5f * (ring & 1)) * (2.0f * math::kPi / counts[ring]);
+            float ca = std::cos(a), sa = std::sin(a);
+            Vec3 rel = body(ca * r, 0.2f + sa * r * 0.8f, z);
+            // Sunlit top, grey underside: the shading gives the cloud volume and
+            // keeps it readable against the bright haze.
+            unsigned g = static_cast<unsigned>(214.0f + 38.0f * sa);
+            float alpha = ringAlpha[ring] * k * breathe(time, ring * 1.3f + i * 2.1f);
+            puffs[n++] = {rel, math::dot(rel, cam.forward), size, abgr(g, g, std::min(255u, g + 6u), byte(alpha))};
         }
     }
 
-    // --- 2. Condensation sheets on the wing tops, ending at the wing shock
-    // (from ~45% chord at M 0.88 to the trailing edge at M 1). From the chase
-    // camera this is what reads best.
-    const float fShock = 0.45f + 0.52f * math::clamp(shock, 0.0f, 1.0f);
-    const float fRows[4] = {0.10f, fShock - 0.10f, fShock, fShock + 0.03f};
-    const float aRows[4] = {0.0f, 1.0f, 1.0f, 0.0f};
-    const float sCols[4] = {0.12f, 0.4f, 0.68f, 0.9f};
-    // Two layers (just above the skin and a little higher) give the sheet body.
-    for (int sheet = 0; sheet < 4; ++sheet) {
-        const int side = sheet & 1;
-        const float lift = sheet < 2 ? 0.12f : 0.4f, layerAlpha = sheet < 2 ? 1.0f : 0.55f;
-        float mirror = side ? -1.0f : 1.0f;
-        auto at = [&](float sp, float f) {
+    // --- Wings: puffs over the upper surface up to the wing shock (45% chord
+    // at M 0.88, the trailing edge at M 1). Seen best from the chase camera.
+    const float fShock = 0.45f + 0.52f * s1;
+    const float spans[4] = {0.15f, 0.38f, 0.6f, 0.8f};
+    const float chords[2] = {0.2f + (fShock - 0.2f) * 0.4f, fShock - 0.05f};
+    const float rowAlpha[2] = {0.5f, 0.8f};
+    for (int side = 0; side < 2; ++side) {
+        const float mirror = side ? -1.0f : 1.0f;
+        for (int si = 0; si < 4; ++si) {
             const fx::WingSpan &a = pts.wingRoot, &b = pts.wingTip;
-            float x = a.x + (b.x - a.x) * sp, y = a.y + (b.y - a.y) * sp + lift;
-            float zle = a.zLE + (b.zLE - a.zLE) * sp, chord = a.chord + (b.chord - a.chord) * sp;
-            return body(mirror * x, y, zle + chord * f);
-        };
-        for (int row = 0; row < 3; ++row) {
-            for (int col = 0; col < 3; ++col) {
-                Vec3 p00 = at(sCols[col], fRows[row]), p10 = at(sCols[col + 1], fRows[row]);
-                Vec3 p11 = at(sCols[col + 1], fRows[row + 1]), p01 = at(sCols[col], fRows[row + 1]);
-                // Thinner towards the tip, where the shock is weaker.
-                float t0 = (1.0f - 0.35f * sCols[col]) * layerAlpha, t1 = (1.0f - 0.35f * sCols[col + 1]) * layerAlpha;
-                uint32_t c00 = abgr(244, 246, 250, byte(aRows[row] * k * t0));
-                uint32_t c10 = abgr(244, 246, 250, byte(aRows[row] * k * t1));
-                uint32_t c11 = abgr(244, 246, 250, byte(aRows[row + 1] * k * t1));
-                uint32_t c01 = abgr(244, 246, 250, byte(aRows[row + 1] * k * t0));
-                float u0 = sCols[col] * 2.0f, u1 = sCols[col + 1] * 2.0f, v0 = fRows[row], v1 = fRows[row + 1];
-                *w++ = {u0, v0, c00, p00.x, p00.y, p00.z};
-                *w++ = {u1, v0, c10, p10.x, p10.y, p10.z};
-                *w++ = {u1, v1, c11, p11.x, p11.y, p11.z};
-                *w++ = {u0, v0, c00, p00.x, p00.y, p00.z};
-                *w++ = {u1, v1, c11, p11.x, p11.y, p11.z};
-                *w++ = {u0, v1, c01, p01.x, p01.y, p01.z};
+            const float sp = spans[si];
+            const float x = a.x + (b.x - a.x) * sp, y = a.y + (b.y - a.y) * sp + 0.35f;
+            const float zle = a.zLE + (b.zLE - a.zLE) * sp, chord = a.chord + (b.chord - a.chord) * sp;
+            for (int row = 0; row < 2; ++row) {
+                Vec3 rel = body(mirror * x, y, zle + chord * chords[row]);
+                float alpha = rowAlpha[row] * k * (1.0f - 0.4f * sp) * breathe(time, si * 1.9f + row + side * 0.7f);
+                puffs[n++] = {rel, math::dot(rel, cam.forward), (2.1f - 1.0f * sp) * (0.9f + 0.2f * k),
+                              abgr(242, 245, 250, byte(alpha))};
             }
         }
     }
-    begin(false, *tex.vapor, true);
-    sceGumDrawArray(GU_TRIANGLES, kFx3D, static_cast<int>(w - v), nullptr, v);
-    end();
+    drawPuffs(puffs, n, *tex.smoke);
 }
 
 void drawTrails(const fx::Trail* const* trails, int count, const FxTextures& tex) {
