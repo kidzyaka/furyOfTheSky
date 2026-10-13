@@ -9,6 +9,7 @@
 
 #include <cstdio>
 
+#include "core/build_info.h"
 #include "game/world.h"
 #include "platform/psp_input.h"
 #include "platform/psp_system.h"
@@ -96,6 +97,9 @@ void overlay(void* drawBuffer) {
     pspDebugScreenSetTextColor(g_app.clock333 ? 0xFFA0A0A0 : 0xFF4040FF);
     pspDebugScreenSetXY(51, 1);
     pspDebugScreenPrintf("%4.1f fps %s", g_app.fps, g_app.clock333 ? "333" : "222!");
+    pspDebugScreenSetTextColor(0xFFA0A0A0);
+    pspDebugScreenSetXY(51, 2);
+    pspDebugScreenPrintf("%.16s", core::kBuildId);
     if (g_app.paused) drawMenu();
     if (g_app.wantShot) {  // after the text, so the HUD is in the picture
         g_app.wantShot = false;

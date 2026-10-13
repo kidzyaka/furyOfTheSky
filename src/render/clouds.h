@@ -26,7 +26,7 @@ private:
         uint8_t shade;   // 0..255 grey, darker at cloud bases
     };
     struct Visible {
-        math::Vec3 pos;
+        math::Vec3 rel;  // position relative to the camera
         float size;
         float dist;
         uint32_t color;

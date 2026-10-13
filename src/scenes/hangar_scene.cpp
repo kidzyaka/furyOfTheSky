@@ -27,10 +27,10 @@ void HangarScene::render() {
     gfx::setProjection(55.0f, 1.0f, 400.0f);
     math::Vec3 eye{distance_ * std::cos(pitch_) * std::sin(yaw_), distance_ * std::sin(pitch_),
                    distance_ * std::cos(pitch_) * std::cos(yaw_)};
-    gfx::setView(eye, {0, 0, 0}, {0, 1, 0});
+    gfx::setCamera(eye, {0, 0, 0}, {0, 1, 0});
     gfx::enableSunLight(game::world::sunDirection());
     assets_.liveries[settings_.livery].bind();
-    gfx::setModelIdentity();
+    gfx::setModel({0, 0, 0}, math::Quat{});
     assets_.su35s.draw();
     gfx::disableLighting();
 }

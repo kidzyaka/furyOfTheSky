@@ -16,6 +16,9 @@ if(NOT PSP)
     target_compile_features(flight_tests PRIVATE cxx_std_17)
     target_compile_options(flight_tests PRIVATE -Wall -Wextra)
     add_test(NAME flight_model COMMAND flight_tests)
+    add_executable(ge_precision_tests tests/ge_precision_test.cpp)
+    target_compile_features(ge_precision_tests PRIVATE cxx_std_17)
+    add_test(NAME ge_precision COMMAND ge_precision_tests)
     return()
 endif()
 
@@ -37,6 +40,16 @@ add_executable(fury
     src/scenes/flight_scene.cpp
     src/scenes/hangar_scene.cpp
 )
+# Build id shown in the HUD (regenerated on every build).
+set(BUILD_INFO_CPP ${CMAKE_BINARY_DIR}/generated/build_info.cpp)
+add_custom_target(build_info
+    COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${BUILD_INFO_CPP} -P ${CMAKE_SOURCE_DIR}/cmake/build_info.cmake
+    BYPRODUCTS ${BUILD_INFO_CPP}
+    COMMENT "Stamping build id"
+)
+target_sources(fury PRIVATE ${BUILD_INFO_CPP})
+add_dependencies(fury build_info)
+
 target_include_directories(fury PRIVATE src)
 target_compile_features(fury PRIVATE cxx_std_17)
 target_compile_options(fury PRIVATE

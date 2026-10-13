@@ -6,6 +6,9 @@
 #include "render/gu_context.h"
 
 namespace gfx {
+namespace {
+math::Vec3 g_origin;  // camera position: the render-space origin
+}  // namespace
 
 void setProjection(float fovDeg, float nearZ, float farZ) {
     sceGumMatrixMode(GU_PROJECTION);
@@ -13,30 +16,36 @@ void setProjection(float fovDeg, float nearZ, float farZ) {
     sceGumPerspective(fovDeg, static_cast<float>(kScreenW) / kScreenH, nearZ, farZ);
 }
 
-void setView(const math::Vec3& eye, const math::Vec3& target, const math::Vec3& up) {
+void setCamera(const math::Vec3& eye, const math::Vec3& target, const math::Vec3& up) {
+    g_origin = eye;
+    math::Vec3 t = target - eye;  // full float precision, on the CPU
     sceGumMatrixMode(GU_VIEW);
     sceGumLoadIdentity();
-    ScePspFVector3 e = {eye.x, eye.y, eye.z};
-    ScePspFVector3 t = {target.x, target.y, target.z};
+    ScePspFVector3 e = {0.0f, 0.0f, 0.0f};
+    ScePspFVector3 tv = {t.x, t.y, t.z};
     ScePspFVector3 u = {up.x, up.y, up.z};
-    sceGumLookAt(&e, &t, &u);
+    sceGumLookAt(&e, &tv, &u);
 }
 
-void setModelIdentity() {
+const math::Vec3& renderOrigin() { return g_origin; }
+
+void setModelRenderSpace() {
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
 }
 
-void setModelTranslation(const math::Vec3& pos) {
+void setModelTranslation(const math::Vec3& worldPos) {
+    math::Vec3 p = worldPos - g_origin;
     sceGumMatrixMode(GU_MODEL);
     sceGumLoadIdentity();
-    ScePspFVector3 p = {pos.x, pos.y, pos.z};
-    sceGumTranslate(&p);
+    ScePspFVector3 v = {p.x, p.y, p.z};
+    sceGumTranslate(&v);
 }
 
-void setModel(const math::Vec3& pos, const math::Quat& rot) {
+void setModel(const math::Vec3& worldPos, const math::Quat& rot) {
     // pspgum matrices are column-major: x/y/z/w are the images of the basis
     // vectors and the translation (see gumTranslate writing into .w).
+    math::Vec3 pos = worldPos - g_origin;
     math::Vec3 r = rot.rotate(math::kRight), u = rot.rotate(math::kUp), b = rot.rotate({0, 0, 1});
     ScePspFMatrix4 m = {{r.x, r.y, r.z, 0.0f}, {u.x, u.y, u.z, 0.0f}, {b.x, b.y, b.z, 0.0f},
                         {pos.x, pos.y, pos.z, 1.0f}};

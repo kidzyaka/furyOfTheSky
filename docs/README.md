@@ -22,6 +22,7 @@
 - [0010 — аркадная модель полёта с фиксированным шагом](decisions/0010-arcade-flight-model.md)
 - [0011 — отрисовка мира: небо, океан, облака, дымка](decisions/0011-world-rendering.md)
 - [0012 — отсечение задних граней GU_CCW](decisions/0012-backface-culling-ccw.md)
+- [0013 — рендер относительно камеры (матрицы GE 24-битные)](decisions/0013-camera-relative-rendering.md)
 
 ## Знания о PSP
 - [psp/gotchas.md](psp/gotchas.md) — ловушки железа, GE, прошивки и тулчейна (с пометкой, где проверено)

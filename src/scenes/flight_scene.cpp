@@ -72,7 +72,7 @@ void FlightScene::render() {
     const game::FlightState& s = model_.state();
 
     gfx::setProjection(cam.fovDeg, 1.0f, 12000.0f);
-    gfx::setView(cam.eye, cam.target, cam.up);
+    gfx::setCamera(cam.eye, cam.target, cam.up);
     math::Vec3 fwd = math::normalize(cam.target - cam.eye);
     math::Vec3 right = math::normalize(math::cross(fwd, cam.up));
     math::Vec3 up = math::cross(right, fwd);

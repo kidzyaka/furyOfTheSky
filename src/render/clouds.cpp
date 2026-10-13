@@ -51,6 +51,7 @@ void Clouds::init(uint32_t seed) {
 }
 
 void Clouds::draw(const game::CameraPose& cam, const Texture& texture) {
+    // Sprite corners are written camera-relative (docs/decisions/0013).
     math::Vec3 fwd = math::normalize(cam.target - cam.eye);
     math::Vec3 right = math::normalize(math::cross(fwd, cam.up));
     math::Vec3 up = math::cross(right, fwd);
@@ -67,7 +68,7 @@ void Clouds::draw(const game::CameraPose& cam, const Texture& texture) {
         float a = math::clamp((kMaxDist - dist) / kFadeBand, 0.0f, 1.0f) *
                   math::clamp((dist - p.size * 0.6f) / p.size, 0.0f, 1.0f);  // fly-through fade
         if (a <= 0.01f) continue;
-        visible_[n++] = {pos, p.size, dist, abgr(p.shade, p.shade, p.shade, unsigned(a * 255))};
+        visible_[n++] = {d, p.size, dist, abgr(p.shade, p.shade, p.shade, unsigned(a * 255))};
     }
     if (n == 0) return;
     std::sort(visible_, visible_ + n, [](const Visible& a, const Visible& b) { return a.dist > b.dist; });
@@ -80,13 +81,13 @@ void Clouds::draw(const game::CameraPose& cam, const Texture& texture) {
     auto* sv = static_cast<SpriteVertex*>(sceGuGetMemory(n * 2 * sizeof(SpriteVertex)));
     for (int i = 0; i < n; ++i) {
         const Visible& p = visible_[i];
-        math::Vec3 tl = p.pos - right * p.size + up * p.size;
-        math::Vec3 br = p.pos + right * p.size - up * p.size;
+        math::Vec3 tl = p.rel - right * p.size + up * p.size;
+        math::Vec3 br = p.rel + right * p.size - up * p.size;
         sv[2 * i] = {0.0f, 0.0f, p.color, tl.x, tl.y, tl.z};
         sv[2 * i + 1] = {1.0f, 1.0f, p.color, br.x, br.y, br.z};
     }
 
-    setModelIdentity();
+    setModelRenderSpace();
     disableLighting();
     texture.bind(false, true);
     sceGuEnable(GU_BLEND);
