@@ -1,0 +1,36 @@
+# Документация Fury of the Sky
+
+Правила ведения документации — в [CLAUDE.md](../CLAUDE.md).
+
+## Обзор
+- [architecture.md](architecture.md) — устройство движка: модули, кадр, память, конвейер ассетов
+- [workflow.md](workflow.md) — установка, сборка, деплой на PSP, smoke-тест, сборка моделей
+- [roadmap.md](roadmap.md) — этапы разработки
+- [devlog.md](devlog.md) — журнал по сессиям: что сделано, что сломалось и почему
+
+## Решения (ADR)
+- [0000 — шаблон](decisions/0000-template.md)
+- [0001 — тулчейн pspdev + CMake](decisions/0001-toolchain-pspdev-cmake.md)
+- [0002 — целевое железо PSP-3006, эмулятор только для smoke-тестов](decisions/0002-target-real-hardware.md)
+- [0003 — C++17 без исключений и RTTI](decisions/0003-cpp17-subset.md)
+- [0004 — процедурные модели в Blender из кода](decisions/0004-procedural-models-blender.md)
+- [0005 — запечённый текстурный атлас T8 с зеркальной развёрткой](decisions/0005-baked-t8-atlas.md)
+- [0006 — формат меша FSM3: индексированный, float](decisions/0006-mesh-format-fsm3.md)
+- [0007 — система координат и единицы](decisions/0007-coordinates-units.md)
+- [0008 — настройка GU и кадра](decisions/0008-gu-frame-setup.md)
+- [0009 — ассеты отдельными файлами рядом с EBOOT](decisions/0009-loose-asset-files.md)
+- [0010 — аркадная модель полёта с фиксированным шагом](decisions/0010-arcade-flight-model.md)
+- [0011 — отрисовка мира: небо, океан, облака, дымка](decisions/0011-world-rendering.md)
+- [0012 — отсечение задних граней GU_CCW](decisions/0012-backface-culling-ccw.md)
+
+## Знания о PSP
+- [psp/gotchas.md](psp/gotchas.md) — ловушки железа, GE, прошивки и тулчейна (с пометкой, где проверено)
+- [psp/hardware.md](psp/hardware.md) — характеристики, важные для движка, карта VRAM
+- [psp/emulator.md](psp/emulator.md) — PPSSPP как инструмент отладки: логи, software renderer
+
+## Форматы файлов
+- [formats/fsm3.md](formats/fsm3.md) — меш
+- [formats/ftx2.md](formats/ftx2.md) — текстура (модели и окружение)
+
+## Ассеты
+- [assets/su35s.md](assets/su35s.md) — Су-35С
