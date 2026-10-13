@@ -12,8 +12,9 @@ import math
 
 import numpy as np
 
-from fmodel import (MeshBuilder, airfoil, arc_ring, camo, fin_rings, mix, se_ring, smoothstep,
-                    spline, star_sdf, surface_coords, wing_rings, fbm)
+from fmodel import (CH_FLAPERON, CH_NOZZLE, CH_RUDDER, CH_SLAT, CH_STABILATOR, MeshBuilder, airfoil,
+                    arc_ring, camo, fin_rings, lifting_surface, mix, se_ring, smoothstep, spline, star_sdf,
+                    station_at, surface_coords, wing_rings, fbm)
 
 NACELLE_X = 1.15
 NOZZLE_Z = -0.24
@@ -37,6 +38,24 @@ VENTRAL = [dict(x=2.05, y=-6.00, z=-0.12, chord=1.50, t=0.08),
            dict(x=2.30, y=-6.70, z=-0.90, chord=0.90, t=0.04)]
 
 THIN_FOIL = airfoil([0.01, 0.05, 0.15, 0.33, 0.58, 0.82], lower=1.0)
+
+# Control surfaces: span range (s, 0 = root) and chord range (f, 0 = LE).
+SLAT = dict(s0=0.06, s1=0.97, f0=0.0, f1=0.14)        # leading-edge flap
+FLAPERON = dict(s0=0.10, s1=0.90, f0=0.76, f1=1.0)
+RUDDER = dict(s0=0.12, s1=0.86, f0=0.70, f1=1.0)
+STAB_PIVOT_Y = -7.55                                  # stabilator spindle, at the boom
+NOZZLE_PIVOT_Y = -8.45                                # nozzle swivel ring
+NOZZLE_CANT = math.radians(32)                        # deflection plane, outboard of vertical
+
+
+def hinge(stations, s0, s1, f):
+    """Pivot and axis (root -> tip) of the hinge line at chord fraction f.
+    Works for wings (span along x) and fins (span along z) alike."""
+    def point(s):
+        p = station_at(stations, s)
+        return (p["x"], p["y"] - f * p["chord"], p["z"])
+    a, b = point(s0), point(s1)
+    return a, tuple(bi - ai for ai, bi in zip(a, b))
 
 
 def build():
@@ -104,13 +123,26 @@ def build():
     rings = [se_ring(y, NACELLE_X, NOZZLE_Z, r, r, seg=20) for y, r in noz]
     rings += [se_ring(-9.62, NACELLE_X, NOZZLE_Z, 0.36, 0.36, seg=20),
               se_ring(-9.05, NACELLE_X, NOZZLE_Z, 0.33, 0.33, seg=20)]
-    mb.loft(rings, "nozzle", smooth=55, cap_part="nozzle_in")
+    # AL-41F1S: each nozzle swivels in one plane, canted 32 deg outboard of
+    # vertical; the axis is normal to that plane (+ = exit down and inboard).
+    nozzle = mb.joint("nozzle", CH_NOZZLE, (NACELLE_X, NOZZLE_PIVOT_Y, NOZZLE_Z),
+                      (math.cos(NOZZLE_CANT), 0.0, -math.sin(NOZZLE_CANT)))
+    mb.loft(rings, "nozzle", smooth=55, cap_part="nozzle_in", joint=nozzle)
 
-    # Lifting surfaces.
+    # Lifting surfaces with their moving parts (docs/assets/su35s.md, "Подвижные части").
     mb.loft(wing_rings(LERX, 1), "lerx", smooth=110)
-    mb.loft(wing_rings(WING, 5), "wing", smooth=110)
-    mb.loft(fin_rings(FIN, 4, THIN_FOIL), "fin", smooth=110)
-    mb.loft(wing_rings(STAB, 3, THIN_FOIL), "stab", smooth=110)
+    pivot, axis = hinge(WING, SLAT["s0"], SLAT["s1"], SLAT["f1"])
+    slat = mb.joint("slat", CH_SLAT, pivot, tuple(-c for c in axis))      # inboard axis: + = LE down
+    pivot, axis = hinge(WING, FLAPERON["s0"], FLAPERON["s1"], FLAPERON["f0"])
+    flap = mb.joint("flaperon", CH_FLAPERON, pivot, axis)                  # outboard axis: + = TE down
+    lifting_surface(mb, WING, wing_rings, airfoil(), "wing", 110, 5,
+                    [dict(SLAT, part="slat", joint=slat), dict(FLAPERON, part="flap", joint=flap)])
+    pivot, axis = hinge(FIN, RUDDER["s0"], RUDDER["s1"], RUDDER["f0"])
+    rudder = mb.joint("rudder", CH_RUDDER, pivot, axis)                    # upward axis: + = TE outboard
+    lifting_surface(mb, FIN, fin_rings, THIN_FOIL, "fin", 110, 4, [dict(RUDDER, part="rudder", joint=rudder)])
+    # All-moving stabilator on a spindle normal to the centreline.
+    stab = mb.joint("stabilator", CH_STABILATOR, (STAB[0]["x"], STAB_PIVOT_Y, STAB[0]["z"]), (1, 0, 0))
+    mb.loft(wing_rings(STAB, 3, THIN_FOIL), "stab", smooth=110, joint=stab)
     mb.loft(fin_rings(VENTRAL, 1, THIN_FOIL), "ventral", smooth=110)
 
     # Wingtip launch rails, protruding ahead of the leading edge.
@@ -134,7 +166,8 @@ HATCHES = [(5.45, -0.18, 0.40, 0.16), (4.20, 0.28, 0.32, 0.14), (-2.60, 0.30, 0.
            (-5.30, 0.22, 0.35, 0.10)]
 NACELLE_HATCHES = [(0.90, -0.42, 0.55, 0.18), (-2.40, -0.40, 0.45, 0.16), (-5.60, -0.30, 0.40, 0.14)]
 
-SKIN_PARTS = ("fuselage", "spine", "nacelle", "lerx", "wing", "boom", "fin", "stab", "ventral")
+SKIN_PARTS = ("fuselage", "spine", "nacelle", "lerx", "wing", "slat", "flap", "boom", "fin", "rudder", "stab",
+              "ventral")
 
 
 def _rect_sdf(a, b, ca, cb, ha, hb):
@@ -153,7 +186,7 @@ def paint(m, lv):
     img = camo(m, lv, skin.astype(np.float32))
 
     fus, spine, nac = m.is_part("fuselage"), m.is_part("spine"), m.is_part("nacelle")
-    wing, fin = m.is_part("wing"), m.is_part("fin")
+    wing, fin = m.is_part("wing", "slat", "flap"), m.is_part("fin", "rudder")
 
     # Dielectric panels: radome, fin tips.
     mix(img, lv["radome"], m.fill(RADOME_END - y) * fus)

@@ -13,6 +13,10 @@ inline float clamp(float v, float lo, float hi) { return v < lo ? lo : (v > hi ?
 inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
 inline float radians(float deg) { return deg * (kPi / 180.0f); }
 inline float degrees(float rad) { return rad * (180.0f / kPi); }
+inline float smoothstep(float e0, float e1, float x) {
+    float t = clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
 
 // Frame-rate independent exponential approach factor: fraction of the
 // remaining distance covered in `dt` at `rate` (1/s).

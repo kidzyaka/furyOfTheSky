@@ -10,6 +10,8 @@ struct ControlInput {
     float yaw = 0.0f;    // -1..1, +1 = nose right
     bool throttleUp = false;    // hold: full power, afterburner once spooled up
     bool throttleDown = false;  // hold: idle + airbrake
+    bool psm = false;           // hold: FCS limiter off (post-stall manoeuvring / G override)
+    bool flares = false;        // hold: release flare salvos
 };
 
 }  // namespace game

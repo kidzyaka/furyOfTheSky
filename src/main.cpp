@@ -14,8 +14,10 @@
 #include "platform/psp_input.h"
 #include "platform/psp_system.h"
 #include "render/gu_context.h"
+#include "render/hud_draw.h"
 #include "render/screenshot.h"
 #include "render/view.h"
+#include "scenes/flight_hud.h"
 #include "scenes/flight_scene.h"
 #include "scenes/hangar_scene.h"
 
@@ -64,25 +66,38 @@ void updateMenu(const platform::Pad& pad) {
     }
 }
 
+// Pause menu in the HUD style, drawn into the frame (not as debug text).
 void drawMenu() {
+    using namespace scenes::hud;
     const char* labels[kMenuCount];
     char scene[40], livery[40], invert[40];
-    std::snprintf(scene, sizeof scene, "Scene:  %s", g_app.scenes[1 - g_app.scene]->name());
-    std::snprintf(livery, sizeof livery, "Livery: %s", scenes::kLiveryNames[g_app.settings.livery]);
-    std::snprintf(invert, sizeof invert, "Pitch:  %s", g_app.settings.invertPitch ? "inverted" : "normal");
-    labels[kResume] = "Resume";
+    std::snprintf(scene, sizeof scene, "SCENE   %s", g_app.scenes[1 - g_app.scene]->name());
+    std::snprintf(livery, sizeof livery, "LIVERY  %s", scenes::kLiveryNames[g_app.settings.livery]);
+    std::snprintf(invert, sizeof invert, "PITCH   %s", g_app.settings.invertPitch ? "INVERTED" : "NORMAL");
+    labels[kResume] = "RESUME";
     labels[kScene] = scene;
     labels[kLivery] = livery;
     labels[kInvert] = invert;
-    labels[kRestart] = "Restart";
-    pspDebugScreenSetXY(22, 12);
-    pspDebugScreenSetTextColor(0xFF40C0FF);
-    pspDebugScreenPrintf("=== PAUSED ===");
+    labels[kRestart] = "RESTART";
+
+    gfx::drawScreenTint(gfx::abgr(8, 16, 12, 150));
+    gfx::HudCanvas& c = gfx::hudCanvas();
+    c.reset();
+    c.color(kGreen);
+    c.width(kLineWidth);
+    c.box(130.0f, 70.0f, 350.0f, 206.0f);
+    c.text(240.0f, 80.0f, "PAUSED", 12.0f, gfx::HudCanvas::kCenter);
+    c.width(kTextWidth);
     for (int i = 0; i < kMenuCount; ++i) {
-        pspDebugScreenSetXY(18, 14 + i);
-        pspDebugScreenSetTextColor(i == g_app.menuCursor ? 0xFF40FFFF : 0xFFFFFFFF);
-        pspDebugScreenPrintf("%s %s", i == g_app.menuCursor ? ">" : " ", labels[i]);
+        float y = 108.0f + i * 17.0f;
+        c.color(i == g_app.menuCursor ? kAmber : kGreen);
+        if (i == g_app.menuCursor) c.text(146.0f, y, ">", 8.0f);
+        c.text(160.0f, y, labels[i], 8.0f);
     }
+    c.color(kDim);
+    c.text(240.0f, 214.0f, "STICK PITCH/ROLL  L/R YAW  ^ BOOST  X BRAKE", 6.0f, gfx::HudCanvas::kCenter);
+    c.text(240.0f, 226.0f, "O PSM (LIMITER OFF)  [] FLARES  SELECT SHOT", 6.0f, gfx::HudCanvas::kCenter);
+    c.flush(g_app.assets.line);
 }
 
 void overlay(void* drawBuffer) {
@@ -93,14 +108,14 @@ void overlay(void* drawBuffer) {
         pspDebugScreenPrintf("ERROR: cannot load %s", g_app.assets.error);
         return;
     }
-    current().overlay();
+    current().overlay(drawBuffer);
+    // Debug corner: frame rate, CPU clock and the build id (docs/workflow.md).
     pspDebugScreenSetTextColor(g_app.clock333 ? 0xFFA0A0A0 : 0xFF4040FF);
     pspDebugScreenSetXY(51, 1);
     pspDebugScreenPrintf("%4.1f fps %s", g_app.fps, g_app.clock333 ? "333" : "222!");
     pspDebugScreenSetTextColor(0xFFA0A0A0);
     pspDebugScreenSetXY(51, 2);
     pspDebugScreenPrintf("%.16s", core::kBuildId);
-    if (g_app.paused) drawMenu();
     if (g_app.wantShot) {  // after the text, so the HUD is in the picture
         g_app.wantShot = false;
         gfx::saveScreenshot(drawBuffer);
@@ -134,10 +149,11 @@ int main() {
     switchScene(0);
 
     // Smoke-test hook (docs/psp/emulator.md): with an "autoshot" file beside the
-    // EBOOT, fly a scripted sortie, capture a few frames, visit the hangar, quit.
+    // EBOOT, fly a scripted sortie (it asks for its own screenshots), then
+    // visit the hangar, take one more and quit.
     const bool autoshot = fileExists("autoshot");
     flight.setAutopilot(autoshot);
-    int frame = 0;
+    int hangarFrames = -1;
 
     const uint32_t clearColor = gfx::abgr(game::world::kHazeRGB[0], game::world::kHazeRGB[1],
                                           game::world::kHazeRGB[2]);
@@ -157,10 +173,16 @@ int main() {
         platform::Pad pad = platform::readPad();
         if (autoshot) {
             pad = platform::Pad{};  // the script flies; the pad is ignored
-            ++frame;
-            if (frame == 100 || frame == 220 || frame == 340 || frame == 420) g_app.wantShot = true;
-            if (frame == 350) switchScene(1);
-            if (frame == 430) break;
+            if (flight.takeShotRequest()) g_app.wantShot = true;
+            if (hangarFrames < 0 && flight.scriptDone()) {
+                switchScene(1);
+                hangarFrames = 0;
+            }
+            if (hangarFrames >= 0) {
+                ++hangarFrames;
+                if (hangarFrames == 90) g_app.wantShot = true;  // mid parts-demo cycle
+                if (hangarFrames == 100) break;
+            }
         }
         if (pad.hit(PSP_CTRL_SELECT)) g_app.wantShot = true;
         if (pad.hit(PSP_CTRL_START)) {
@@ -175,6 +197,7 @@ int main() {
 
         gfx::beginFrame(clearColor);
         if (!g_app.assets.error) current().render();
+        if (g_app.paused) drawMenu();
         gfx::endFrame(overlay);
     }
 

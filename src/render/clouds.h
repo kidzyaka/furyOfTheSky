@@ -12,8 +12,10 @@ namespace gfx {
 // sorted back to front every frame for alpha blending.
 class Clouds {
 public:
-    void init(uint32_t seed);
+    void init(uint32_t seed, const math::Vec3& dirToSun);
     void draw(const game::CameraPose& cam, const Texture& texture);
+    // 0..1: how deep inside a puff the camera was at the last draw (whiteout).
+    float immersion() const { return immersion_; }
 
 private:
     static constexpr int kClouds = 42;
@@ -35,6 +37,7 @@ private:
     Puff puffs_[kMaxPuffs];
     int puffCount_ = 0;
     Visible visible_[kMaxPuffs];
+    float immersion_ = 0.0f;
 };
 
 }  // namespace gfx

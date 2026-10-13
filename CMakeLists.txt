@@ -5,6 +5,10 @@ project(FuryOfTheSky C CXX)
 set(SIM_SOURCES
     src/game/flight_model.cpp
     src/game/chase_camera.cpp
+    src/game/control_surfaces.cpp
+    src/game/countermeasures.cpp
+    src/fx/particles.cpp
+    src/fx/aircraft_fx.cpp
 )
 
 if(NOT PSP)
@@ -29,7 +33,9 @@ add_executable(fury
     src/platform/psp_input.cpp
     src/platform/psp_system.cpp
     src/render/clouds.cpp
+    src/render/fx_draw.cpp
     src/render/gu_context.cpp
+    src/render/hud_draw.cpp
     src/render/mesh.cpp
     src/render/ocean.cpp
     src/render/screenshot.cpp
@@ -37,6 +43,7 @@ add_executable(fury
     src/render/texture.cpp
     src/render/view.cpp
     src/scenes/assets.cpp
+    src/scenes/flight_hud.cpp
     src/scenes/flight_scene.cpp
     src/scenes/hangar_scene.cpp
 )

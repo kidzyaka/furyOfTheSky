@@ -31,7 +31,8 @@ float wrapNear(float value, float around) { return value + std::round((around - 
 
 }  // namespace
 
-void Clouds::init(uint32_t seed) {
+void Clouds::init(uint32_t seed, const math::Vec3& dirToSun) {
+    const math::Vec3 sun = math::normalize(dirToSun);
     Rng rng{seed};
     puffCount_ = 0;
     for (int c = 0; c < kClouds; ++c) {
@@ -45,7 +46,10 @@ void Clouds::init(uint32_t seed) {
             puff.pos = centre + math::Vec3{rng.range(-170.0f, 170.0f) * scale, h * 110.0f * scale,
                                            rng.range(-120.0f, 120.0f) * scale};
             puff.size = rng.range(80.0f, 140.0f) * scale * (1.0f - 0.35f * h);
-            puff.shade = static_cast<uint8_t>(205 + 50 * h);
+            // Lit side towards the sun, darker bases: static, the sun never moves.
+            math::Vec3 out = math::normalize(puff.pos - centre + math::Vec3{0.0f, 40.0f * scale, 0.0f});
+            float shade = 200.0f + 45.0f * h + 34.0f * math::dot(out, sun);
+            puff.shade = static_cast<uint8_t>(math::clamp(shade, 150.0f, 255.0f));
         }
     }
 }
@@ -57,10 +61,12 @@ void Clouds::draw(const game::CameraPose& cam, const Texture& texture) {
     math::Vec3 up = math::cross(right, fwd);
 
     int n = 0;
+    float nearest = 1e9f;  // distance / size of the closest puff
     for (int i = 0; i < puffCount_; ++i) {
         const Puff& p = puffs_[i];
         math::Vec3 pos{wrapNear(p.pos.x, cam.eye.x), p.pos.y, wrapNear(p.pos.z, cam.eye.z)};
         math::Vec3 d = pos - cam.eye;
+        nearest = std::min(nearest, math::length(d) / p.size);
         float depth = math::dot(d, fwd);
         if (depth < p.size * 0.6f) continue;  // behind us, or so close the sprite would explode
         float dist = math::length(d);
@@ -70,6 +76,7 @@ void Clouds::draw(const game::CameraPose& cam, const Texture& texture) {
         if (a <= 0.01f) continue;
         visible_[n++] = {d, p.size, dist, abgr(p.shade, p.shade, p.shade, unsigned(a * 255))};
     }
+    immersion_ = math::smoothstep(1.05f, 0.5f, nearest);
     if (n == 0) return;
     std::sort(visible_, visible_ + n, [](const Visible& a, const Visible& b) { return a.dist > b.dist; });
 

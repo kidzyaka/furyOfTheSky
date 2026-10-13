@@ -35,6 +35,7 @@ psp-cmake -B build/psp && cmake --build build/psp
 cmake -B build/host && cmake --build build/host && ctest --test-dir build/host   # тесты физики на Mac
 tools/smoke_test.sh                        # прогон в PPSSPP (software renderer) + скриншоты
 python3 tools/textures/env.py              # текстуры окружения
+python3 tools/textures/fx.py               # текстуры эффектов и HUD
 tools/deploy.sh                            # копирование на PSP в режиме USB
 /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup \
     --python tools/models/build.py -- su35s   # пересборка модели, превью в build/previews/
@@ -43,7 +44,7 @@ tools/deploy.sh                            # копирование на PSP в 
 Перед тем как отдавать сборку на железо: host-тесты и `tools/smoke_test.sh` должны пройти
 (нет `Unknown syscall`, скриншоты осмысленные). Подробности — `docs/workflow.md`.
 
-`src/game` и `src/math` — платформенно-нейтральные: **никаких заголовков PSP** (их собирают host-тесты).
+`src/game`, `src/fx` и `src/math` — платформенно-нейтральные: **никаких заголовков PSP** (их собирают host-тесты).
 
 ## Известные ловушки (полный список — docs/psp/gotchas.md)
 
@@ -54,3 +55,7 @@ tools/deploy.sh                            # копирование на PSP в 
 - **Матрицы GE 24-битные** → мировые координаты в матрицы не передавать: только `gfx::setCamera` +
   `gfx::setModel*` (рендер относительно камеры, ADR 0013). Вершины, которые пишет CPU, — относительно `renderOrigin()`.
 - В HUD справа сверху — id сборки (`<hash>[+] HH:MM`): по фото с PSP видно, какая версия запущена.
+- 2D (`GU_TRANSFORM_2D`): UV в **текселях**. Аддитивные проходы — с чёрным цветом тумана (`setAdditiveFog`).
+- Ближняя плоскость не меньше 3 м, у камеры — только мелкие треугольники (иначе GE их отбрасывает, №19).
+- Готовый кадр читать только в `overlay` (после `sceGuSync`): GE рисует, пока CPU пишет список (№23).
+- Меш — FSM4 с подвижными частями; новый руль = `joint()` + `lifting_surface(movers=…)` (ADR 0015).

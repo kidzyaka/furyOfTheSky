@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Emulator smoke test (dev Mac only, see docs/psp/emulator.md).
 # Runs the built game from PPSSPP's own memory stick with the `autoshot` hook:
-# the game flies a scripted sortie (3 shots), visits the hangar (1 shot), quits. Fails on unresolved imports.
+# the game flies a scripted sortie through every effect (8 shots: cruise, AB turn
+# with vapor, flares, cobra, vapor cone, sonic boom, low pass, crash), visits the
+# hangar (1 shot), quits. Fails on unresolved imports.
 # Output: build/smoke/shot_*.png and build/smoke/ppsspp.log
 set -euo pipefail
 
@@ -36,9 +38,11 @@ rm -f "$OUT"/shot_*.png "$OUT/ppsspp.log"   # PPSSPP appends to an existing log
 
 "$PPSSPP" --log="$OUT/ppsspp.log" -d "$MS/EBOOT.PBP" >/dev/null 2>&1 &
 PID=$!
-for _ in $(seq 1 120); do
+EXPECTED=9
+LAST="$MS/screenshots/shot_$(printf %03d $((EXPECTED - 1))).bmp"
+for _ in $(seq 1 240); do
     sleep 1
-    [[ -f "$MS/screenshots/shot_003.bmp" ]] && break
+    [[ -f "$LAST" ]] && break
 done
 sleep 2
 kill "$PID" 2>/dev/null || true
@@ -57,8 +61,8 @@ for bmp in "$MS"/screenshots/shot_*.bmp; do
     shots=$((shots + 1))
 done
 rm -rf "$MS/screenshots"
-if (( shots < 4 )); then
-    echo "FAIL: expected 4 screenshots, got $shots (game hung or crashed? see $OUT/ppsspp.log)"
+if (( shots < EXPECTED )); then
+    echo "FAIL: expected $EXPECTED screenshots, got $shots (game hung or crashed? see $OUT/ppsspp.log)"
     status=1
 fi
 (( status == 0 )) && echo "PASS: $shots screenshots in $OUT"

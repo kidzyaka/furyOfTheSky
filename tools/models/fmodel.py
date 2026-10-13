@@ -10,7 +10,9 @@ Runs inside Blender (bpy / bmesh / mathutils / numpy). Pipeline:
      lets the skin be *painted in 3D*: camo noise, panel lines, decals, and
      ray-traced ambient occlusion - no seams in the pattern, no hand painting.
   4. The result is quantised to a 256-colour CLUT, mip-mapped and swizzled
-     for the PSP GE, and the mesh exported as an indexed, smooth-shaded list.
+     for the PSP GE, and the mesh exported as an indexed, smooth-shaded list
+     split into parts: the static airframe plus hinged control surfaces and
+     nozzles, each with its pivot and hinge axis (docs/formats/fsm4.md).
 
 Blender space while modelling: X = right wing, Y = nose, Z = up, metres.
 Game space on export:          X = right,      Y = up,  -Z = nose.
@@ -26,7 +28,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import bmesh
 import bpy
 import numpy as np
-from mathutils import Vector
+from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
 
 import ftx  # noqa: E402  (tools/pipeline)
@@ -142,11 +144,107 @@ def surface_coords(pos, stations, span_axis):
     return s, (le - pos[..., 1]) / chord, chord
 
 
+def station_at(stations, s):
+    """Linear interpolation between the root and tip stations of a surface."""
+    root, tip = stations[0], stations[-1]
+    return {k: lerp(root[k], tip[k], s) for k in root}
+
+
+def chord_slice(foil, f0, f1):
+    """Closed section of an airfoil ring between chord fractions f0..f1
+    (a control surface or the fixed box between two of them).
+    Returns (ring, cut_edges): ring edges i -> i+1 in cut_edges are the
+    straight hinge cuts, to be shaded flat."""
+    te = foil.index((1.0, 0.0))
+    top = foil[:te + 1]                                   # LE -> TE
+    bottom = [foil[0]] + foil[te + 1:][::-1] + [foil[te]]  # LE -> TE
+
+    def at(surface, f):
+        for (fa, ka), (fb, kb) in zip(surface, surface[1:]):
+            if fa <= f <= fb:
+                return (f, ka + (kb - ka) * ((f - fa) / (fb - fa) if fb > fa else 0.0))
+        raise ValueError(f)
+
+    def run(surface):
+        return [at(surface, f0)] + [p for p in surface if f0 < p[0] < f1] + [at(surface, f1)]
+
+    t, b = run(top), run(bottom)
+    ring = t + b[::-1]              # top LE->TE, then the bottom back to the LE
+    cuts = set()
+    if f1 < 1.0:
+        cuts.add(len(t) - 1)        # top f1 -> bottom f1
+    else:
+        ring = t + b[::-1][1:]      # sharp TE: one shared point
+    if f0 > 0.0:
+        cuts.add(len(ring) - 1)     # bottom f0 -> top f0 (closing edge)
+    else:
+        ring = ring[:-1]            # round LE: one shared point
+    return ring, cuts
+
+
+def lifting_surface(mb, stations, rings_fn, foil, part, smooth, steps, movers=()):
+    """Loft a lifting surface with control surfaces cut out of it.
+    movers: dicts(part, joint, s0, s1, f0, f1) - span and chord ranges.
+    The fixed surface is lofted segment by segment between span breaks, as the
+    chord ranges left over; each mover is its own closed shell, so it can
+    rotate about its hinge and the gap shows solid ends, not holes."""
+    breaks = sorted({0.0, 1.0} | {m["s0"] for m in movers} | {m["s1"] for m in movers})
+
+    def stations_between(a, b):
+        n = max(1, round((b - a) * steps))
+        return [station_at(stations, a + (b - a) * i / n) for i in range(n + 1)]
+
+    for a, b in zip(breaks, breaks[1:]):
+        mid = 0.5 * (a + b)
+        cuts = sorted((m["f0"], m["f1"]) for m in movers if m["s0"] <= mid <= m["s1"])
+        edges = [0.0] + [f for c in cuts for f in c] + [1.0]
+        sts = stations_between(a, b)
+        for f0, f1 in zip(edges[0::2], edges[1::2]):
+            if f1 - f0 > 1e-6:
+                ring, flat = chord_slice(foil, f0, f1)
+                mb.loft(rings_fn(sts, 1, ring), part, smooth, flat_edges=flat)
+    for m in movers:
+        span = [x for x in breaks if m["s0"] <= x <= m["s1"]]
+        sts = []
+        for a, b in zip(span, span[1:]):
+            sts += stations_between(a, b)[(1 if sts else 0):]
+        ring, flat = chord_slice(foil, m["f0"], m["f1"])
+        mb.loft(rings_fn(sts, 1, ring), m["part"], smooth, flat_edges=flat, joint=m["joint"])
+
+
+# Articulation channels - must match gfx::MeshChannel (src/render/mesh.h).
+# Positive angles are mirror-symmetric (both sides move alike):
+CH_STATIC = 0
+CH_STABILATOR = 1   # trailing edge down
+CH_FLAPERON = 2     # trailing edge down
+CH_SLAT = 3         # leading edge down
+CH_RUDDER = 4       # trailing edge outboard
+CH_NOZZLE = 5       # exit down (in the nozzle's canted deflection plane)
+
+
 # ================================================================ mesh
 
 class Part:
     def __init__(self, name, smooth):
         self.name, self.smooth = name, smooth
+
+
+class Joint:
+    """A hinged part of the right half: rotates about `axis` through `pivot`
+    (Blender space). The left copy gets the mirrored pivot and the axis
+    -mirror(axis), so equal angles give mirror-symmetric motion."""
+
+    def __init__(self, name, channel, pivot, axis):
+        self.name, self.channel = name, channel
+        self.pivot, self.axis = Vector(pivot), Vector(axis).normalized()
+
+    def side(self, side):
+        """(pivot, axis) for side 1 = right, 2 = left."""
+        p, a = self.pivot.copy(), self.axis.copy()
+        if side == 2:
+            p.x = -p.x
+            a = Vector((a.x, -a.y, -a.z))
+        return p, a
 
 
 class MeshBuilder:
@@ -158,8 +256,14 @@ class MeshBuilder:
         self.bm = bmesh.new()
         self.l_part = self.bm.faces.layers.int.new("part")
         self.l_group = self.bm.faces.layers.int.new("sgroup")
+        self.l_joint = self.bm.faces.layers.int.new("joint")
         self.parts = []
         self.group_smooth = []
+        self.joints = [None]            # 0 = the static airframe
+
+    def joint(self, name, channel, pivot, axis):
+        self.joints.append(Joint(name, channel, pivot, axis))
+        return len(self.joints) - 1
 
     def part_id(self, name, smooth):
         for i, p in enumerate(self.parts):
@@ -172,23 +276,27 @@ class MeshBuilder:
         self.group_smooth.append(smooth)
         return len(self.group_smooth) - 1
 
-    def loft(self, rings, part, smooth=60.0, cap_start=True, cap_end=True, cap_part=None):
+    def loft(self, rings, part, smooth=60.0, cap_start=True, cap_end=True, cap_part=None,
+             flat_edges=(), joint=0):
+        """flat_edges: ring edge indices whose strips are shaded flat (hinge cuts).
+        joint: index from self.joint() - the shell moves with it."""
         pid = self.part_id(part, smooth)
         cap_pid = self.part_id(cap_part, smooth) if cap_part else pid
         verts = [[self.bm.verts.new(v) for v in ring] for ring in rings]
         n = len(rings[0])
         side = self._group(smooth)
+        flat = {i: self._group(0.0) for i in flat_edges}
         faces = []
         for a, b in zip(verts, verts[1:]):
             for i in range(n):
                 j = (i + 1) % n
                 f = self.bm.faces.new((a[i], a[j], b[j], b[i]))
-                f[self.l_part], f[self.l_group] = pid, side
+                f[self.l_part], f[self.l_group], f[self.l_joint] = pid, flat.get(i, side), joint
                 faces.append(f)
         for flag, ring, rev in ((cap_start, verts[0], True), (cap_end, verts[-1], False)):
             if flag:
                 f = self.bm.faces.new(list(reversed(ring)) if rev else ring)
-                f[self.l_part], f[self.l_group] = cap_pid, self._group(0.0)
+                f[self.l_part], f[self.l_group], f[self.l_joint] = cap_pid, self._group(0.0), joint
                 faces.append(f)
         bmesh.ops.recalc_face_normals(self.bm, faces=faces)
 
@@ -254,35 +362,72 @@ class MeshBuilder:
 
     # ------------------------------------------------------------ export
 
+    def part_groups(self, bm):
+        """Faces grouped by (joint, side): side 0 = static, 1 = right, 2 = left."""
+        lj = bm.faces.layers.int["joint"]
+        groups = {}
+        for f in bm.faces:
+            j = f[lj]
+            side = 0 if j == 0 else (1 if f.calc_center_median().x > 0 else 2)
+            groups.setdefault((j, side), []).append(f)
+        return dict(sorted(groups.items()))
+
     def export_fsm(self, path):
-        """Indexed triangle list, vertex = GU_TEXTURE_32BITF | GU_NORMAL_32BITF |
+        """FSM4 (docs/formats/fsm4.md): one vertex/index buffer, index ranges
+        per part. Vertex = GU_TEXTURE_32BITF | GU_NORMAL_32BITF |
         GU_VERTEX_32BITF (32 bytes), 16-bit indices."""
         bm = self.full
         uv = bm.loops.layers.uv.active
         normals = self.corner_normals(bm)
-        verts, index, lookup = [], [], {}
+        verts, index, lookup, parts = [], [], {}, []
         radius = 0.0
-        for f in bm.faces:
-            for l, n in zip(f.loops, normals[f.index]):
-                c, t = l.vert.co, l[uv].uv
-                key = (round(c.x, 4), round(c.y, 4), round(c.z, 4),
-                       round(n.x, 3), round(n.y, 3), round(n.z, 3), round(t.x, 5), round(t.y, 5))
-                if key not in lookup:
-                    lookup[key] = len(verts)
-                    verts.append((t.x, 1.0 - t.y, n.x, n.z, -n.y, c.x, c.z, -c.y))
-                    radius = max(radius, c.length)
-                index.append(lookup[key])
+        for (j, side), faces in self.part_groups(bm).items():
+            first = len(index)
+            for f in faces:
+                for l, n in zip(f.loops, normals[f.index]):
+                    c, t = l.vert.co, l[uv].uv
+                    key = (round(c.x, 4), round(c.y, 4), round(c.z, 4),
+                           round(n.x, 3), round(n.y, 3), round(n.z, 3), round(t.x, 5), round(t.y, 5))
+                    if key not in lookup:
+                        lookup[key] = len(verts)
+                        verts.append((t.x, 1.0 - t.y, n.x, n.z, -n.y, c.x, c.z, -c.y))
+                        radius = max(radius, c.length)
+                    index.append(lookup[key])
+            if j == 0:
+                channel, pivot, axis = CH_STATIC, Vector(), Vector((1, 0, 0))
+            else:
+                channel = self.joints[j].channel
+                pivot, axis = self.joints[j].side(side)
+            parts.append((first, len(index) - first, channel, side,
+                          (pivot.x, pivot.z, -pivot.y), (axis.x, axis.z, -axis.y)))
         assert len(verts) < 65536
         with open(path, "wb") as fh:
-            fh.write(struct.pack("<4sIIf", b"FSM3", len(verts), len(index), radius))
+            fh.write(struct.pack("<4sIIfI12x", b"FSM4", len(verts), len(index), radius, len(parts)))
+            for first, count, channel, side, p, a in parts:
+                fh.write(struct.pack("<IIHH4x3f4x3f4x", first, count, channel, side, *p, *a))
             for v in verts:
                 fh.write(struct.pack("<8f", *v))
             fh.write(struct.pack(f"<{len(index)}H", *index))
             fh.write(b"\0" * ((-fh.tell()) % 16))
+        self.part_table = parts
         return len(index) // 3, len(verts), radius
 
-    def to_object(self, name):
-        bm = self.full
+    def posed(self, angle):
+        """Copy of the full mesh with joints deflected: angle(channel, side) in
+        radians (side 1 = right, 2 = left). For preview renders."""
+        bm = self.full.copy()
+        for (j, side), faces in self.part_groups(bm).items():
+            if j == 0:
+                continue
+            pivot, axis = self.joints[j].side(side)
+            rot = Matrix.Rotation(angle(self.joints[j].channel, side), 4, axis)
+            for v in {v for f in faces for v in f.verts}:
+                v.co = pivot + rot @ (v.co - pivot)
+        bm.normal_update()
+        return bm
+
+    def to_object(self, name, bm=None):
+        bm = bm or self.full
         normals = self.corner_normals(bm)
         me = bpy.data.meshes.new(name)
         bm.to_mesh(me)

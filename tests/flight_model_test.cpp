@@ -1,4 +1,4 @@
-// Host-side tests for the platform-neutral flight model (docs/decisions/0010).
+// Host-side tests for the platform-neutral flight model (docs/decisions/0014).
 // Build & run: cmake -B build/host && cmake --build build/host && ctest --test-dir build/host
 
 #include <algorithm>
@@ -58,17 +58,42 @@ void testLevelCruise() {
 }
 
 void testAfterburnerTopSpeed() {
-    std::printf("afterburner accelerates to ~1850 km/h in level flight\n");
+    std::printf("afterburner punches through Mach 1 and tops out ~1750 km/h in level flight\n");
     auto fm = levelFlight(3000, 250);
     ControlInput in;
     in.throttleUp = true;
-    run(fm, in, 20);
-    float at20 = fm.state().speed * kKmh;
-    run(fm, in, 160);
+    float machOneAt = -1.0f, altAt20 = 0.0f;
+    for (int i = 0; i < int(180 / kDt); ++i) {
+        fm.step(in, kDt);
+        if (machOneAt < 0 && fm.state().mach >= 1.0f) machOneAt = i * kDt;
+        if (i == int(20 / kDt)) altAt20 = fm.state().position.y;
+    }
     float top = fm.state().speed * kKmh;
+    std::printf("    Mach 1 after %.1f s, top %.0f km/h, altitude after 20 s %.0f m\n", machOneAt, top, altAt20);
     CHECK(fm.state().afterburner, "afterburner engaged");
-    CHECK(at20 > 1300, "speed after 20 s: %.0f km/h", at20);
+    CHECK(machOneAt > 0 && machOneAt < 25, "Mach 1 reached after %.1f s", machOneAt);
     CHECK(top > 1750 && top < 1950, "top speed %.0f km/h", top);
+    // Neutral stick holds the path; while accelerating hard the trim AoA lags
+    // a little behind, so a slight climb is expected (and harmless).
+    CHECK(std::fabs(altAt20 - 3000) < 60, "altitude after 20 s: %.0f m", altAt20);
+}
+
+void testTransonicDragHump() {
+    std::printf("the drag hump slows the acceleration around Mach 1 (the 'barrier')\n");
+    auto accelAt = [](float mach) {
+        auto fm = levelFlight(3000, mach * kSu35S.speedOfSound);
+        ControlInput in;
+        in.throttleUp = true;
+        run(fm, in, 2.0f);  // spool up
+        float v0 = fm.state().speed;
+        run(fm, in, 0.5f);
+        return (fm.state().speed - v0) / 0.5f;
+    };
+    float sub = accelAt(0.80f), peak = accelAt(0.99f), sup = accelAt(1.25f);
+    std::printf("    accel: M0.8 %.1f, M0.99 %.1f, M1.25 %.1f m/s^2\n", sub, peak, sup);
+    CHECK(peak < sub * 0.6f, "hump at M1: %.1f vs %.1f", peak, sub);
+    CHECK(peak > 1.0f, "afterburner still pushes through: %.1f", peak);
+    CHECK(sup > peak, "easier past the hump: %.1f", sup);
 }
 
 void testAirbrakeSlowsDown() {
@@ -153,7 +178,7 @@ void testStallDropsNose() {
     CHECK(fm.state().stalled, "stalled flag set at %.0f m/s", fm.state().speed);
     run(fm, {}, 8.0f);
     CHECK(pitchDeg(fm) < 0.0f || !fm.state().stalled, "nose %.1f deg, stalled %d", pitchDeg(fm), fm.state().stalled);
-    CHECK(fm.state().speed > kSu35S.stallSpeed, "recovered to %.0f m/s", fm.state().speed);
+    CHECK(fm.state().speed > 55.0f, "recovered to %.0f m/s", fm.state().speed);
     CHECK(fm.state().position.y < 3000, "lost altitude while stalled: %.0f m", fm.state().position.y);
 }
 
@@ -174,6 +199,7 @@ void testDeterminism() {
         in.pitch = std::sin(i * 0.01f);
         in.roll = std::cos(i * 0.013f);
         in.throttleUp = (i / 300) % 2 == 0;
+        in.psm = (i / 450) % 2 == 1;
         a.step(in, kDt);
         b.step(in, kDt);
     }
@@ -187,9 +213,145 @@ void testDeterminism() {
                  same(&sa.pathDir, &sb.pathDir, sizeof sa.pathDir) && same(&sa.speed, &sb.speed, sizeof sa.speed) &&
                  same(&sa.bodyRates, &sb.bodyRates, sizeof sa.bodyRates) &&
                  same(&sa.throttle, &sb.throttle, sizeof sa.throttle) &&
-                 same(&sa.loadFactor, &sb.loadFactor, sizeof sa.loadFactor) && sa.afterburner == sb.afterburner &&
+                 same(&sa.loadFactor, &sb.loadFactor, sizeof sa.loadFactor) &&
+                 same(&sa.alpha, &sb.alpha, sizeof sa.alpha) && same(&sa.beta, &sb.beta, sizeof sa.beta) &&
+                 same(&sa.mach, &sb.mach, sizeof sa.mach) && sa.psm == sb.psm && sa.afterburner == sb.afterburner &&
                  sa.airbrake == sb.airbrake && sa.stalled == sb.stalled && sa.crashed == sb.crashed;
     CHECK(equal, "states differ");
+}
+
+void testAlphaLimiter() {
+    std::printf("normal law: full pull never exceeds the AoA limiter\n");
+    for (float speed : {70.0f, 120.0f, 200.0f, 350.0f}) {
+        auto fm = levelFlight(3000, speed);
+        ControlInput in;
+        in.pitch = 1.0f;
+        float maxAlpha = 0.0f;
+        for (int i = 0; i < int(4 / kDt); ++i) {
+            fm.step(in, kDt);
+            maxAlpha = std::max(maxAlpha, fm.state().alpha);
+        }
+        std::printf("    %3.0f km/h: max AoA %.1f deg\n", speed * kKmh, math::degrees(maxAlpha));
+        CHECK(maxAlpha < kSu35S.alphaMax + 0.04f, "AoA %.1f deg at %.0f m/s", math::degrees(maxAlpha), speed);
+    }
+}
+
+float pathPitchDeg(const FlightModel& fm) { return math::degrees(std::asin(fm.state().pathDir.y)); }
+
+void testCobra() {
+    std::printf("cobra: limiter off + full pull at 450 km/h -> nose past 90 deg, path stays level\n");
+    auto fm = levelFlight(3000, 125);
+    ControlInput in;
+    in.psm = true;
+    in.pitch = 1.0f;
+    float maxAlpha = 0.0f, minSpeed = 1e9f, pathMin = 0.0f, pathMax = 0.0f;
+    float released = -1.0f, recovered = -1.0f;
+    for (int i = 0; i < int(6 / kDt); ++i) {
+        float t = i * kDt;
+        if (released < 0 && (fm.state().alpha > math::radians(100) || t > 1.6f)) {
+            in = ControlInput{};  // let go of everything: the FCS takes over
+            released = t;
+        }
+        fm.step(in, kDt);
+        const auto& s = fm.state();
+        maxAlpha = std::max(maxAlpha, s.alpha);
+        minSpeed = std::min(minSpeed, s.speed);
+        pathMin = std::min(pathMin, pathPitchDeg(fm));
+        pathMax = std::max(pathMax, pathPitchDeg(fm));
+        if (released >= 0 && recovered < 0 && std::fabs(s.alpha) < 0.35f) recovered = t - released;
+    }
+    const auto& s = fm.state();
+    std::printf("    max AoA %.0f deg (released at %.2f s), speed 450 -> min %.0f km/h, path %.0f..%.0f deg, "
+                "recovered in %.1f s, altitude %+.0f m\n",
+                math::degrees(maxAlpha), released, minSpeed * kKmh, pathMin, pathMax, recovered,
+                s.position.y - 3000);
+    CHECK(maxAlpha > math::radians(85), "max AoA %.0f deg", math::degrees(maxAlpha));
+    CHECK(minSpeed < 125 * 0.75f, "speed bled to %.0f km/h", minSpeed * kKmh);
+    CHECK(pathMax < 35 && pathMin > -40, "path pitch %.0f..%.0f deg", pathMin, pathMax);
+    CHECK(recovered > 0 && recovered < 3.0f, "nose back on the path after %.1f s", recovered);
+    CHECK(std::fabs(s.position.y - 3000) < 250, "altitude change %.0f m", s.position.y - 3000);
+    CHECK(std::fabs(s.pathDir.x) < 0.05f, "no heading change: path x %.2f", s.pathDir.x);
+    CHECK(!s.crashed && !s.psm, "flying, normal law");
+}
+
+void testKulbit() {
+    std::printf("kulbit: keep pulling with the limiter off -> full somersault almost in place\n");
+    auto fm = levelFlight(3000, 110);
+    ControlInput in;
+    in.psm = true;
+    in.pitch = 1.0f;
+    float turned = 0.0f, t = 0.0f, pathMin = 0.0f, pathMax = 0.0f;
+    Vec3 start = fm.state().position;
+    while (turned < 2.0f * math::kPi && t < 6.0f) {
+        Vec3 f0 = fm.state().orientation.forward();
+        Vec3 r0 = fm.state().orientation.right();
+        fm.step(in, kDt);
+        Vec3 f1 = fm.state().orientation.forward();
+        // Signed nose rotation about the wing axis.
+        turned += std::atan2(math::dot(math::cross(f0, f1), r0), math::dot(f0, f1));
+        pathMin = std::min(pathMin, pathPitchDeg(fm));
+        pathMax = std::max(pathMax, pathPitchDeg(fm));
+        t += kDt;
+    }
+    Vec3 moved = fm.state().position - start;
+    std::printf("    360 deg in %.1f s, path %.0f..%.0f deg, moved %.0f m forward, %+.0f m up\n", t, pathMin, pathMax,
+                -moved.z, moved.y);
+    CHECK(turned >= 2.0f * math::kPi && t < 4.5f, "somersault %.0f deg in %.1f s", math::degrees(turned), t);
+    CHECK(pathMax < 60 && pathMin > -75, "path did not loop: %.0f..%.0f deg", pathMin, pathMax);
+    CHECK(-moved.z < 450, "travelled %.0f m forward", -moved.z);
+}
+
+void testPsmSpeedGate() {
+    std::printf("above PSM speed circle only lifts the G-limiter (13 g)\n");
+    FlightModel fm(kSu35S);
+    fm.reset({0, 3000, 0}, Quat::axisAngle(math::kForward, math::radians(-80)), 250);
+    ControlInput in;
+    in.psm = true;
+    in.pitch = 1.0f;
+    float maxG = 0.0f, maxAlpha = 0.0f;
+    for (int i = 0; i < int(2 / kDt); ++i) {
+        fm.step(in, kDt);
+        CHECK(!fm.state().psm, "PSM engaged at %.0f m/s", fm.state().speed);
+        maxG = std::max(maxG, fm.state().loadFactor);
+        maxAlpha = std::max(maxAlpha, fm.state().alpha);
+    }
+    std::printf("    peak %.1f g, AoA %.1f deg\n", maxG, math::degrees(maxAlpha));
+    CHECK(maxG > kSu35S.maxG + 0.5f && maxG < kSu35S.overrideG + 1.0f, "peak %.1f g", maxG);
+}
+
+void testSlowFlightWithTvc() {
+    std::printf("thrust vectoring keeps the nose quick at 250 km/h\n");
+    auto fm = levelFlight(3000, 70);
+    ControlInput in;
+    in.pitch = -1.0f;  // push to the negative limit first: a long way to travel
+    run(fm, in, 1.0f);
+    in.pitch = 1.0f;
+    float t = 0.0f;
+    while (fm.state().alpha < kSu35S.alphaMax - 0.03f && t < 2.0f) {
+        fm.step(in, kDt);
+        t += kDt;
+    }
+    std::printf("    AoA %.0f -> %.0f deg in %.2f s at %.0f km/h\n", math::degrees(kSu35S.alphaMin),
+                math::degrees(fm.state().alpha), t, fm.state().speed * kKmh);
+    CHECK(t < 1.0f, "full AoA swing took %.2f s", t);
+}
+
+void testChaseCameraFollowsPathInCobra() {
+    std::printf("chase camera stays behind the flight path at high AoA\n");
+    auto fm = levelFlight(3000, 125);
+    game::ChaseCamera cam;
+    cam.reset(fm.state());
+    ControlInput in;
+    in.psm = true;
+    in.pitch = 1.0f;
+    for (int i = 0; i < int(1.2f / kDt) && fm.state().alpha < math::radians(90); ++i) {
+        fm.step(in, kDt);
+        cam.update(fm.state(), kDt);
+    }
+    Vec3 look = math::normalize(cam.pose().target - cam.pose().eye);
+    float lookPitch = math::degrees(std::asin(look.y));
+    std::printf("    AoA %.0f deg, camera looks %.0f deg up\n", math::degrees(fm.state().alpha), lookPitch);
+    CHECK(lookPitch < 40.0f, "camera pitched up %.0f deg with the nose", lookPitch);
 }
 
 void testChaseCameraBehind() {
@@ -208,6 +370,7 @@ void testChaseCameraBehind() {
 int main() {
     testLevelCruise();
     testAfterburnerTopSpeed();
+    testTransonicDragHump();
     testAirbrakeSlowsDown();
     testClimbTradesSpeed();
     testTurnRespectsGLimit();
@@ -216,6 +379,12 @@ int main() {
     testStallDropsNose();
     testCrashIntoSea();
     testDeterminism();
+    testAlphaLimiter();
+    testCobra();
+    testKulbit();
+    testPsmSpeedGate();
+    testSlowFlightWithTvc();
+    testChaseCameraFollowsPathInCobra();
     testChaseCameraBehind();
     std::printf(g_failures ? "\n%d FAILED\n" : "\nALL PASSED\n", g_failures);
     return g_failures ? 1 : 0;

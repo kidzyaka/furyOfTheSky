@@ -1,6 +1,7 @@
 #pragma once
 
 #include "platform/psp_input.h"
+#include "render/fx_draw.h"
 #include "render/mesh.h"
 #include "render/texture.h"
 
@@ -14,9 +15,12 @@ struct Assets {
     gfx::Mesh su35s;
     gfx::Texture liveries[kLiveryCount];
     gfx::Texture ocean, cloud, sun;
+    // Effects and HUD (tools/textures/fx.py).
+    gfx::Texture glow, smoke, flame, vapor, ring, glint, shadow, line, ribbon, waves;
     const char* error = nullptr;  // path of the first file that failed
 
     bool load();
+    gfx::FxTextures fx() const { return {&glow, &smoke, &flame, &vapor, &ring, &ribbon, &shadow}; }
 };
 
 // Player options edited in the pause menu.
@@ -32,9 +36,11 @@ public:
     virtual const char* name() const = 0;
     virtual void enter() {}
     virtual void update(const platform::Pad& pad, float dt) = 0;
+    // 3D scene and its HUD, into the frame's display list.
     virtual void render() = 0;
-    // Debug text over the finished frame (runs after the GE is done).
-    virtual void overlay() {}
+    // Runs on the finished frame after the GE is done: debug text, reading
+    // pixels back (sun occlusion for the lens flare).
+    virtual void overlay(void* drawBuffer) { (void)drawBuffer; }
 };
 
 }  // namespace scenes

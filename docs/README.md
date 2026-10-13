@@ -23,6 +23,12 @@
 - [0011 — отрисовка мира: небо, океан, облака, дымка](decisions/0011-world-rendering.md)
 - [0012 — отсечение задних граней GU_CCW](decisions/0012-backface-culling-ccw.md)
 - [0013 — рендер относительно камеры (матрицы GE 24-битные)](decisions/0013-camera-relative-rendering.md)
+- [0014 — модель полёта v2: угол атаки, СДУ, сверхманевренность (кобра, кульбит)](decisions/0014-flight-model-v2-psm.md)
+- [0015 — подвижные части самолёта: формат FSM4 и аниматор рулей](decisions/0015-articulated-mesh-fsm4.md)
+- [0016 — визуальные эффекты: «режиссёр», частицы, ленты, пламя, звуковой барьер](decisions/0016-effects.md)
+- [0017 — тепловые ловушки](decisions/0017-countermeasures.md)
+- [0018 — HUD в стиле голографического индикатора](decisions/0018-hud.md)
+- [0019 — освещение и графика: свет самолёта, море, блики, тень](decisions/0019-lighting-graphics.md)
 
 ## Знания о PSP
 - [psp/gotchas.md](psp/gotchas.md) — ловушки железа, GE, прошивки и тулчейна (с пометкой, где проверено)
@@ -30,7 +36,8 @@
 - [psp/emulator.md](psp/emulator.md) — PPSSPP как инструмент отладки: логи, software renderer
 
 ## Форматы файлов
-- [formats/fsm3.md](formats/fsm3.md) — меш
+- [formats/fsm4.md](formats/fsm4.md) — меш с подвижными частями (текущий)
+- [formats/fsm3.md](formats/fsm3.md) — меш, предыдущая версия (история)
 - [formats/ftx2.md](formats/ftx2.md) — текстура (модели и окружение)
 
 ## Ассеты

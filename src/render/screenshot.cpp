@@ -16,7 +16,18 @@ void put32(uint8_t* p, uint32_t v) { for (int i = 0; i < 4; ++i) p[i] = (v >> (8
 
 int g_counter = 0;
 
+const uint32_t* vramFrame(void* drawBuffer) {
+    // Uncached mirror of VRAM: the GE wrote it, the CPU cache never saw it.
+    return reinterpret_cast<const uint32_t*>(0x40000000u | (reinterpret_cast<uintptr_t>(sceGeEdramGetAddr()) +
+                                                           reinterpret_cast<uintptr_t>(drawBuffer)));
+}
+
 }  // namespace
+
+uint32_t readPixel(void* drawBuffer, int x, int y) {
+    if (x < 0 || y < 0 || x >= kScreenW || y >= kScreenH) return 0;
+    return vramFrame(drawBuffer)[y * kBufferW + x];
+}
 
 bool saveScreenshot(void* drawBuffer) {
     constexpr int kRow = kScreenW * 3;  // 1440, already a multiple of 4
@@ -39,10 +50,7 @@ bool saveScreenshot(void* drawBuffer) {
     put32(header + 34, kImage);
     std::fwrite(header, 1, sizeof header, f);
 
-    // Uncached mirror of VRAM: the GE wrote it, the CPU cache never saw it.
-    auto* vram = reinterpret_cast<const uint32_t*>(
-        0x40000000u | (reinterpret_cast<uintptr_t>(sceGeEdramGetAddr()) +
-                       reinterpret_cast<uintptr_t>(drawBuffer)));
+    const uint32_t* vram = vramFrame(drawBuffer);
     static uint8_t row[kRow];
     for (int y = kScreenH - 1; y >= 0; --y) {
         const uint32_t* src = vram + y * kBufferW;

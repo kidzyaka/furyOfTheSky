@@ -3,21 +3,47 @@
 #include <pspgu.h>
 #include <pspgum.h>
 
+#include <cmath>
+
 #include "render/gu_context.h"
 
 namespace gfx {
 namespace {
 math::Vec3 g_origin;  // camera position: the render-space origin
+CameraBasis g_camera;
+float g_fogNear = 1.0f, g_fogFar = 2.0f;
+uint32_t g_fogColor = 0;
 }  // namespace
 
 void setProjection(float fovDeg, float nearZ, float farZ) {
+    const float aspect = static_cast<float>(kScreenW) / kScreenH;
     sceGumMatrixMode(GU_PROJECTION);
     sceGumLoadIdentity();
-    sceGumPerspective(fovDeg, static_cast<float>(kScreenW) / kScreenH, nearZ, farZ);
+    sceGumPerspective(fovDeg, aspect, nearZ, farZ);  // fov is vertical
+    g_camera.tanHalfY = std::tan(math::radians(fovDeg) * 0.5f);
+    g_camera.tanHalfX = g_camera.tanHalfY * aspect;
+}
+
+const CameraBasis& camera() { return g_camera; }
+
+bool projectDirection(const math::Vec3& dir, float& sx, float& sy) {
+    float z = math::dot(dir, g_camera.forward);
+    float zs = std::fabs(z) > 1e-4f ? std::fabs(z) : 1e-4f;
+    sx = kScreenW * 0.5f * (1.0f + math::dot(dir, g_camera.right) / (zs * g_camera.tanHalfX));
+    sy = kScreenH * 0.5f * (1.0f - math::dot(dir, g_camera.up) / (zs * g_camera.tanHalfY));
+    return z > 1e-4f;
+}
+
+bool projectPoint(const math::Vec3& world, float& sx, float& sy) {
+    return projectDirection(world - g_origin, sx, sy);
 }
 
 void setCamera(const math::Vec3& eye, const math::Vec3& target, const math::Vec3& up) {
     g_origin = eye;
+    g_camera.eye = eye;
+    g_camera.forward = math::normalize(target - eye);
+    g_camera.right = math::normalize(math::cross(g_camera.forward, up));
+    g_camera.up = math::cross(g_camera.right, g_camera.forward);
     math::Vec3 t = target - eye;  // full float precision, on the CPU
     sceGumMatrixMode(GU_VIEW);
     sceGumLoadIdentity();
@@ -54,18 +80,44 @@ void setModel(const math::Vec3& worldPos, const math::Quat& rot) {
 }
 
 void enableSunLight(const math::Vec3& dirToSun) {
-    // World-space light (docs/psp/gotchas.md #7); for GU_DIRECTIONAL the
-    // "position" is the direction towards the light.
+    // World-space lights (docs/psp/gotchas.md #7) - render space is world
+    // shifted by the eye, which leaves directions untouched. For
+    // GU_DIRECTIONAL the "position" is the direction towards the light.
     ScePspFVector3 sun = {dirToSun.x, dirToSun.y, dirToSun.z};
+    ScePspFVector3 sky = {0.0f, 1.0f, 0.0f};
+    ScePspFVector3 sea = {0.0f, -1.0f, 0.0f};
     sceGuEnable(GU_LIGHTING);
     sceGuEnable(GU_LIGHT0);
+    sceGuEnable(GU_LIGHT1);
+    sceGuEnable(GU_LIGHT2);
+    sceGuDisable(GU_LIGHT3);
     sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE_AND_SPECULAR, &sun);
-    sceGuLightColor(0, GU_DIFFUSE, abgr(255, 244, 228));
-    sceGuLightColor(0, GU_SPECULAR, abgr(112, 112, 112));
+    sceGuLightColor(0, GU_DIFFUSE, abgr(255, 242, 222));
+    sceGuLightColor(0, GU_SPECULAR, abgr(150, 150, 146));
+    // Hemisphere approximation: upper surfaces pick up the blue sky, lower
+    // ones the darker sea - instead of one flat ambient everywhere.
+    sceGuLight(1, GU_DIRECTIONAL, GU_DIFFUSE, &sky);
+    sceGuLightColor(1, GU_DIFFUSE, abgr(58, 74, 100));
+    sceGuLight(2, GU_DIRECTIONAL, GU_DIFFUSE, &sea);
+    sceGuLightColor(2, GU_DIFFUSE, abgr(22, 42, 54));
     sceGuLightMode(GU_SEPARATE_SPECULAR_COLOR);
-    sceGuSpecular(14.0f);
-    sceGuAmbient(abgr(82, 92, 106));
+    sceGuSpecular(16.0f);
+    sceGuAmbient(abgr(54, 60, 70));
     sceGuColor(0xFFFFFFFF);
+}
+
+void setPointLight(const math::Vec3& worldPos, uint32_t color, float strength) {
+    if (strength <= 0.01f) {
+        sceGuDisable(GU_LIGHT3);
+        return;
+    }
+    math::Vec3 p = worldPos - g_origin;  // render space
+    ScePspFVector3 pos = {p.x, p.y, p.z};
+    sceGuLight(3, GU_POINTLIGHT, GU_DIFFUSE, &pos);
+    sceGuLightColor(3, GU_DIFFUSE, color);
+    // 1 / (a0 + a1 d + a2 d^2): the tail booms (~3 m) get most of it.
+    sceGuLightAtt(3, 0.6f / strength, 0.0f, 0.12f / strength);
+    sceGuEnable(GU_LIGHT3);
 }
 
 void disableLighting() {
@@ -74,9 +126,14 @@ void disableLighting() {
 }
 
 void enableFog(float nearZ, float farZ, uint32_t color) {
+    g_fogNear = nearZ;
+    g_fogFar = farZ;
+    g_fogColor = color;
     sceGuFog(nearZ, farZ, color);
     sceGuEnable(GU_FOG);
 }
+
+void setAdditiveFog(bool additive) { sceGuFog(g_fogNear, g_fogFar, additive ? 0u : g_fogColor); }
 
 void disableFog() { sceGuDisable(GU_FOG); }
 

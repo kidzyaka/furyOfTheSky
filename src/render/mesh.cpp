@@ -5,6 +5,8 @@
 
 #include <cstring>
 
+#include "render/view.h"
+
 namespace gfx {
 namespace {
 
@@ -13,8 +15,21 @@ struct FsmHeader {
     uint32_t vertexCount;
     uint32_t indexCount;
     float radius;
+    uint32_t partCount;
+    uint32_t reserved[3];
 };
-static_assert(sizeof(FsmHeader) == 16, "FSM3 header");
+static_assert(sizeof(FsmHeader) == 32, "FSM4 header");
+
+struct FsmPart {
+    uint32_t first, count;
+    uint16_t channel, side;
+    uint32_t reserved0;
+    float pivot[3];
+    float pad0;
+    float axis[3];
+    float pad1;
+};
+static_assert(sizeof(FsmPart) == 48, "FSM4 part record");
 
 constexpr int kVertexFormat =
     GU_TEXTURE_32BITF | GU_NORMAL_32BITF | GU_VERTEX_32BITF | GU_INDEX_16BIT | GU_TRANSFORM_3D;
@@ -27,21 +42,75 @@ bool Mesh::load(const char* path) {
 
     FsmHeader h;
     std::memcpy(&h, blob_.data, sizeof h);
-    size_t need = sizeof h + h.vertexCount * sizeof(MeshVertex) + h.indexCount * sizeof(uint16_t);
-    if (std::memcmp(h.magic, "FSM3", 4) != 0 || blob_.size < need) return false;
+    if (std::memcmp(h.magic, "FSM4", 4) != 0 || h.partCount == 0 || h.partCount > kMaxParts) return false;
+    size_t need = sizeof h + h.partCount * sizeof(FsmPart) + h.vertexCount * sizeof(MeshVertex) +
+                  h.indexCount * sizeof(uint16_t);
+    if (blob_.size < need) return false;
 
-    // Header is 16 bytes and vertices 32, so both arrays stay 16-byte aligned.
-    vertices_ = reinterpret_cast<const MeshVertex*>(blob_.data + sizeof h);
+    const uint8_t* p = blob_.data + sizeof h;
+    for (uint32_t i = 0; i < h.partCount; ++i, p += sizeof(FsmPart)) {
+        FsmPart r;
+        std::memcpy(&r, p, sizeof r);
+        if (r.first + r.count > h.indexCount || r.channel >= kChannelCount) return false;
+        parts_[i] = {r.first, r.count, r.channel, r.side, {r.pivot[0], r.pivot[1], r.pivot[2]},
+                     {r.axis[0], r.axis[1], r.axis[2]}};
+    }
+    // Header 32 + parts 48 each + vertices 32 each: both arrays stay 16-byte aligned.
+    vertices_ = reinterpret_cast<const MeshVertex*>(p);
     indices_ = reinterpret_cast<const uint16_t*>(vertices_ + h.vertexCount);
     vertexCount_ = h.vertexCount;
     indexCount_ = h.indexCount;
+    partCount_ = static_cast<int>(h.partCount);
     radius_ = h.radius;
     return true;
 }
 
-void Mesh::draw() const {
+namespace {
+
+float partAngle(const MeshPart& part, const MeshPose* pose) {
+    if (!pose || part.channel == kChannelStatic || part.side == kSideCentre) return 0.0f;
+    return pose->angle[part.channel][part.side == kSideRight ? 0 : 1];
+}
+
+// Rotation about a hinge through `pivot`: x' = pos + rot * (pivot + Rp (x - pivot)).
+void hinged(const MeshPart& part, float angle, const math::Vec3& pos, const math::Quat& rot, math::Vec3& outPos,
+            math::Quat& outRot) {
+    math::Quat rp = math::Quat::axisAngle(part.axis, angle);
+    outRot = rot * rp;
+    outPos = pos + rot.rotate(part.pivot - rp.rotate(part.pivot));
+}
+
+}  // namespace
+
+void Mesh::draw(const math::Vec3& worldPos, const math::Quat& rot, const MeshPose* pose) const {
     if (!vertices_) return;
-    sceGumDrawArray(GU_TRIANGLES, kVertexFormat, indexCount_, indices_, vertices_);
+    bool baseLoaded = false;
+    for (int i = 0; i < partCount_; ++i) {
+        const MeshPart& part = parts_[i];
+        float angle = partAngle(part, pose);
+        if (angle == 0.0f) {
+            if (!baseLoaded) setModel(worldPos, rot);
+            baseLoaded = true;
+        } else {
+            math::Vec3 p;
+            math::Quat q;
+            hinged(part, angle, worldPos, rot, p, q);
+            setModel(p, q);
+            baseLoaded = false;
+        }
+        sceGumDrawArray(GU_TRIANGLES, kVertexFormat, part.count, indices_ + part.first, vertices_);
+    }
+}
+
+bool Mesh::partTransform(uint16_t channel, uint16_t side, const math::Vec3& worldPos, const math::Quat& rot,
+                         const MeshPose* pose, math::Vec3& outPos, math::Quat& outRot) const {
+    for (int i = 0; i < partCount_; ++i) {
+        if (parts_[i].channel == channel && parts_[i].side == side) {
+            hinged(parts_[i], partAngle(parts_[i], pose), worldPos, rot, outPos, outRot);
+            return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace gfx
