@@ -31,6 +31,16 @@ fi
 
 TARGET="$STICK/PSP/GAME/FuryOfTheSky"
 echo "Deploying to $TARGET"
+# A full stick makes rsync die halfway, leaving a mix of old and new files:
+# check first. Need = new build minus what the old copy already occupies.
+need_kb=$(du -sk "$DIST" | cut -f1)
+have_kb=$(du -sk "$TARGET" 2>/dev/null | cut -f1 || echo 0)
+free_kb=$(df -k "$STICK" | awk 'NR==2 {print $4}')
+if (( need_kb - ${have_kb:-0} + 512 > free_kb )); then
+    echo "Not enough space on the memory stick: need ~$(( (need_kb - ${have_kb:-0} + 512) / 1024 + 1 )) MB more," \
+         "free $(( free_kb / 1024 )) MB. Free some space (e.g. an ISO) and run again."
+    exit 1
+fi
 mkdir -p "$TARGET"
 rsync -a --delete --exclude '._*' "$DIST/" "$TARGET/"
 # macOS sprinkles AppleDouble files that show up as broken entries in the XMB.
