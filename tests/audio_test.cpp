@@ -253,7 +253,7 @@ void testInformer() {
         s.position.y = 300.0f;
         s.pathDir = math::normalize({0.0f, -0.6f, -1.0f});
         said = listen(vi, s, 0.4f);
-        CHECK(!said.empty() && said[0] == Message::PullUp, "pull-up interrupts");
+        CHECK(!said.empty() && said[0] == Message::AltitudeDanger, "'высота опасная' interrupts");
     }
     {
         auto vi = makeInformer();

@@ -114,7 +114,7 @@ int main() {
                         {17, "throttle back"},
                         {21, "slow, full aft stick: AoA limit voice"},
                         {25, "cobra (PSM)"},
-                        {30, "dive at the sea: altitude, pull up, impact"},
+                        {30, "dive at the sea: altitude danger, impact"},
                         {34, "after the crash"}};
     std::vector<int16_t> out;
     int16_t block[audio::kMaxBlock * 2];

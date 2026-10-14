@@ -6,15 +6,14 @@
 
 namespace audio {
 
-// Messages of the voice warning system. Wording is the RI-65 ("Rita") set as
-// flown on Su-27SM-class aircraft (docs/decisions/0024); ordered by priority,
-// highest first.
+// Messages of the voice warning system: real RI-65 ("Rita") recordings
+// (docs/decisions/0025), each opened by the informer's 1 kHz attention tone.
+// Ordered by priority, highest first.
 enum class Message : uint8_t {
-    PullUp,      // "Переведи в набор"
-    Altitude,    // "Высота"
-    GLimit,      // "Предельная перегрузка"
-    AoaLimit,    // "Предельный угол атаки"
-    SpeedLimit,  // "Скорость предельная"
+    AltitudeDanger,  // "Высота опасная"
+    GLimit,          // "Предельная перегрузка"
+    AoaLimit,        // "Предельный угол атаки"
+    SpeedLimit,      // "Скорость предельная"
     Count,
     None = Count,
 };

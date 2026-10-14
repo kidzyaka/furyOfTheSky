@@ -14,7 +14,7 @@ constexpr float kSpeedLimit = 1400.0f / 3.6f;  // m/s
 constexpr float kSpeedClear = 1370.0f / 3.6f;
 
 const char* const kFiles[kMessageCount] = {
-    "ri_pull_up", "ri_altitude", "ri_g_limit", "ri_aoa_limit", "ri_speed_limit",
+    "ri_altitude_danger", "ri_g_limit", "ri_aoa_limit", "ri_speed_limit",
 };
 
 }  // namespace
@@ -31,8 +31,9 @@ void VoiceInformer::evaluate(const game::FlightState& s, float dt) {
     bool raw[kMessageCount] = {};
     if (!s.crashed) {
         const game::GroundWarning ground = game::groundWarning(s);
-        raw[static_cast<int>(Message::PullUp)] = ground == game::GroundWarning::PullUp;
-        raw[static_cast<int>(Message::Altitude)] = ground == game::GroundWarning::Altitude;
+        // Both tiers: with the attention tone the phrase takes ~2 s, so it has
+        // to start before the HUD's PULL UP (the Altitude tier, < 9 s to impact).
+        raw[static_cast<int>(Message::AltitudeDanger)] = ground != game::GroundWarning::None;
 
         // Limits with hysteresis: once on, a message stays on until the value
         // is clearly back inside the envelope.
@@ -66,7 +67,8 @@ Message VoiceInformer::update(const game::FlightState& s, float dt) {
         if (!active_[i] || quiet_[i] > 0.0f) continue;
         const Message m = static_cast<Message>(i);
         // One at a time - except that terrain cuts anything else short.
-        if (speakLeft_ > 0.0f && !(m == Message::PullUp && speaking_ != Message::PullUp)) return Message::None;
+        if (speakLeft_ > 0.0f && !(m == Message::AltitudeDanger && speaking_ != Message::AltitudeDanger))
+            return Message::None;
         speaking_ = m;
         speakLeft_ = duration_[i] + kGap;
         quiet_[i] = duration_[i] + kRepeat;

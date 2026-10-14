@@ -1,3 +1,6 @@
 build/
 .DS_Store
 __pycache__/
+
+# Real RI-65 recordings (third-party, personal use only): see tools/audio/fetch_voice.py
+tools/audio/voice_src/*.ogg

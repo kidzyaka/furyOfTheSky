@@ -196,7 +196,7 @@ void drawFlightHud(HudCanvas& c, const game::FlightState& s, const game::Counter
     c.text(464.0f, 250.0f, buf, kText, HudCanvas::kRight);
 
     // --- Warnings and modes, one at a time (priority order).
-    // Same rule as the voice informer's "переведи в набор" (game/warnings.h).
+    // Same rule the voice informer uses for "высота опасная" (game/warnings.h).
     if (game::groundWarning(s) == game::GroundWarning::PullUp) {
         if (blink) warning(c, "PULL UP", kRed);
     } else if (s.psm) {

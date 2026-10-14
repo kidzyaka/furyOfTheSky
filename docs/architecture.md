@@ -28,7 +28,7 @@ src/
     sound.h, wav.cpp        моно-клип, разбор WAV-подмножества
     mixer.*                 программный микшер: 11 каналов, ресемплинг, лимитер, пригибание, очередь команд
     flight_audio.*          «режиссёр» звука самолёта: обороты, рёв, свист, форсаж, обдув, тряска
-    voice_informer.*        речевой информатор (фразы РИ-65): условия, приоритеты, повторы
+    voice_informer.*        речевой информатор (записи РИ-65, ADR 0025): условия, приоритеты, повторы
   platform/               ОС PSP: callbacks/выход, таймер, 333 МГц, джойстик, аудиопоток (psp_audio)
   core/file.*             загрузка файла в выровненную память + writeback кэша
   core/build_info.h       id сборки (генерирует cmake/build_info.cmake при каждой сборке)
@@ -46,14 +46,15 @@ tests/                    host-тесты (clang, ctest): модель полё�
 assets/                   СГЕНЕРИРОВАННЫЕ ассеты — не править руками
   models/                   su35s.fsm, su35s_<ливрея>.ftx
   textures/                 ocean.ftx, cloud.ftx, sun.ftx, fx_*.ftx (эффекты, HUD)
-  sfx/                      *.wav: петли двигателя и обдува, разовые звуки, ri_*.wav — фразы информатора
+  sfx/                      *.wav: петли двигателя и обдува, разовые звуки, ri_*.wav — 34 фразы РИ-65 (в игре 4)
 tools/
   pipeline/               общий код: ftx.py (квантизация, мипы, swizzle), png.py
   models/                 генератор моделей и запекание (Blender)
   textures/env.py         текстуры окружения (numpy)
   textures/fx.py          текстуры эффектов и HUD (numpy)
   audio/sfx.py            звуки (numpy, синтез в частотной области)
-  audio/voice.py          фразы информатора (macOS say → «СПУ»), свои записи из audio/voice_src/
+  audio/fetch_voice.py    скачивает реальные записи РИ-65 в audio/voice_src/ (не в git)
+  audio/voice.py          фразы информатора: запись → единый тон + речь «под СПУ»; без записи — синтез Milena
   audio/preview.cpp       host-программа: саундтрек вылета через настоящий микшер → build/audio_preview.wav
   install_toolchain.sh, deploy.sh, smoke_test.sh
 docs/                     документация
@@ -160,8 +161,8 @@ GE начинает выполнять список, пока CPU его доп�
 | SELECT | скриншот |
 
 Звук слышен сразу: двигатель (рёв, свист, форсаж с треском), обдув по скорости, тряска на больших α / G,
-щелчки ловушек, речевой информатор: «переведи в набор», «высота», «предельная перегрузка»,
-«предельный угол атаки», «скорость предельная» (ADR 0024).
+щелчки ловушек, речевой информатор — реальные записи РИ-65: «высота опасная», «предельная перегрузка»,
+«предельный угол атаки», «скорость предельная» (ADR 0024, 0025).
 
 «Кобра»: ○ + стик на себя до упора на ~1 с, отпустить. «Кульбит»: то же, стик держать до полного оборота.
 
@@ -172,7 +173,7 @@ tools/models/<самолёт>.py ─(Blender)─► fmodel.py ─► assets/mode
 tools/textures/env.py ─(numpy)────────────────────► assets/textures/*.ftx
 tools/textures/fx.py  ─(numpy)────────────────────► assets/textures/fx_*.ftx
 tools/audio/sfx.py    ─(numpy)────────────────────► assets/sfx/*.wav  (WAV 22 050 Гц моно 16 бит)
-tools/audio/voice.py  ─(say Milena / voice_src)───► assets/sfx/ri_*.wav
+tools/audio/fetch_voice.py ─► voice_src/*.ogg ─► tools/audio/voice.py ─► assets/sfx/ri_*.wav
                     оба используют tools/pipeline/ftx.py (k-means / ручная CLUT → мипы → swizzle)
 ```
 Подробно — ADR [0004](decisions/0004-procedural-models-blender.md), [0005](decisions/0005-baked-t8-atlas.md),

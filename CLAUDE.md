@@ -36,7 +36,7 @@ cmake -B build/host && cmake --build build/host && ctest --test-dir build/host  
 tools/smoke_test.sh                        # прогон в PPSSPP (software renderer) + скриншоты
 python3 tools/textures/env.py              # текстуры окружения
 python3 tools/textures/fx.py               # текстуры эффектов и HUD
-python3 tools/audio/sfx.py && python3 tools/audio/voice.py   # звуки и фразы информатора
+python3 tools/audio/sfx.py && python3 tools/audio/voice.py   # звуки и фразы информатора (записи РИ-65: fetch_voice.py)
 build/host/audio_preview                   # саундтрек вылета через настоящий микшер → build/audio_preview.wav
 tools/deploy.sh                            # копирование на PSP в режиме USB
 /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup \
