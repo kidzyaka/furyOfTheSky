@@ -9,8 +9,10 @@
 
 #include <cstdio>
 
+#include "audio/mixer.h"
 #include "core/build_info.h"
 #include "game/world.h"
+#include "platform/psp_audio.h"
 #include "platform/psp_input.h"
 #include "platform/psp_system.h"
 #include "render/gu_context.h"
@@ -41,6 +43,7 @@ struct App {
     float fps = 0.0f;
     bool clock333 = false;
     bool wantShot = false;
+    bool sound = false;  // audio thread running
 };
 
 App g_app;
@@ -48,21 +51,33 @@ App g_app;
 Scene& current() { return *g_app.scenes[g_app.scene]; }
 
 void switchScene(int index) {
+    if (g_app.scenes[g_app.scene]) current().leave();
     g_app.scene = index;
     current().enter();
+}
+
+void uiSound(const audio::Sound& s) { audio::mixer().play(audio::kUi, &s, 0.6f); }
+
+void setPaused(bool paused) {
+    g_app.paused = paused;
+    g_app.menuCursor = 0;
+    // The world holds its breath under the menu; menu clicks stay audible.
+    audio::mixer().setWorldGain(paused ? 0.0f : 1.0f);
 }
 
 void updateMenu(const platform::Pad& pad) {
     if (pad.hit(PSP_CTRL_UP)) g_app.menuCursor = (g_app.menuCursor + kMenuCount - 1) % kMenuCount;
     if (pad.hit(PSP_CTRL_DOWN)) g_app.menuCursor = (g_app.menuCursor + 1) % kMenuCount;
+    if (pad.hit(PSP_CTRL_UP) || pad.hit(PSP_CTRL_DOWN)) uiSound(g_app.assets.uiMove);
     bool activate = pad.hit(PSP_CTRL_CROSS) || pad.hit(PSP_CTRL_LEFT) || pad.hit(PSP_CTRL_RIGHT);
     if (!activate) return;
+    uiSound(g_app.assets.uiSelect);
     switch (g_app.menuCursor) {
-        case kResume: g_app.paused = false; break;
-        case kScene: switchScene(1 - g_app.scene); g_app.paused = false; break;
+        case kResume: setPaused(false); break;
+        case kScene: switchScene(1 - g_app.scene); setPaused(false); break;
         case kLivery: g_app.settings.livery = (g_app.settings.livery + 1) % scenes::kLiveryCount; break;
         case kInvert: g_app.settings.invertPitch = !g_app.settings.invertPitch; break;
-        case kRestart: switchScene(g_app.scene); g_app.paused = false; break;
+        case kRestart: switchScene(g_app.scene); setPaused(false); break;
     }
 }
 
@@ -112,7 +127,7 @@ void overlay(void* drawBuffer) {
     // Debug corner: frame rate, CPU clock and the build id (docs/workflow.md).
     pspDebugScreenSetTextColor(g_app.clock333 ? 0xFFA0A0A0 : 0xFF4040FF);
     pspDebugScreenSetXY(51, 1);
-    pspDebugScreenPrintf("%4.1f fps %s", g_app.fps, g_app.clock333 ? "333" : "222!");
+    pspDebugScreenPrintf("%4.1f fps %s%s", g_app.fps, g_app.clock333 ? "333" : "222!", g_app.sound ? "" : " MUTE");
     pspDebugScreenSetTextColor(0xFFA0A0A0);
     pspDebugScreenSetXY(51, 2);
     pspDebugScreenPrintf("%.16s", core::kBuildId);
@@ -141,6 +156,9 @@ int main() {
     pspDebugScreenEnableBackColor(0);
 
     g_app.assets.load();
+    // After the assets: the mixer must never see a half-loaded clip. Without
+    // a channel the game simply runs silent.
+    g_app.sound = !g_app.assets.error && platform::initAudio();
     // Scenes hold sizeable static geometry (ocean grid, sky dome): keep them off the stack.
     static scenes::FlightScene flight(g_app.assets, g_app.settings);
     static scenes::HangarScene hangar(g_app.assets, g_app.settings);
@@ -186,8 +204,8 @@ int main() {
         }
         if (pad.hit(PSP_CTRL_SELECT)) g_app.wantShot = true;
         if (pad.hit(PSP_CTRL_START)) {
-            g_app.paused = !g_app.paused;
-            g_app.menuCursor = 0;
+            setPaused(!g_app.paused);
+            uiSound(g_app.paused ? g_app.assets.uiSelect : g_app.assets.uiMove);
         }
 
         if (!g_app.assets.error) {
@@ -201,6 +219,7 @@ int main() {
         gfx::endFrame(overlay);
     }
 
+    platform::shutdownAudio();
     sceGuTerm();
     platform::shutdown();
 }

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "audio/mixer.h"
 #include "game/world.h"
 #include "render/fx_draw.h"
 #include "render/gu_context.h"
@@ -18,10 +19,50 @@ namespace scenes {
 namespace world = game::world;
 
 FlightScene::FlightScene(Assets& assets, Settings& settings)
-    : assets_(assets), settings_(settings), model_(game::kSu35S) {
+    : assets_(assets), settings_(settings), model_(game::kSu35S), informer_(game::kSu35S) {
     sky_.init(world::sunDirection());
     ocean_.init();
     clouds_.init(0x35C0FFEE, world::sunDirection());
+}
+
+void FlightScene::enter() {
+    for (int i = 0; i < audio::kMessageCount; ++i)
+        informer_.setDuration(static_cast<audio::Message>(i), assets_.voice[i].seconds());
+    restart();
+    startLoops();
+}
+
+void FlightScene::leave() {
+    audio::Mixer& m = audio::mixer();
+    for (int ch = 0; ch < audio::kChannelCount; ++ch)
+        if (ch != audio::kUi) m.stop(ch);
+}
+
+// The continuous sounds run for the whole visit at their current levels;
+// updateAudio() re-targets them every frame.
+void FlightScene::startLoops() {
+    audio::Mixer& m = audio::mixer();
+    const audio::FlightSoundMix& x = audio_.mix();
+    m.play(audio::kEngineRoar, &assets_.roar, x.roar.gain, x.roar.pitch, 0.0f, true);
+    m.play(audio::kEngineWhine, &assets_.whine, x.whine.gain, x.whine.pitch, 0.0f, true);
+    m.play(audio::kAfterburner, &assets_.afterburner, x.afterburner.gain, x.afterburner.pitch, 0.0f, true);
+    m.play(audio::kWind, &assets_.wind, x.wind.gain, x.wind.pitch, 0.0f, true);
+    m.play(audio::kBuffet, &assets_.buffet, x.buffet.gain, x.buffet.pitch, 0.0f, true);
+}
+
+void FlightScene::updateAudio() {
+    audio::Mixer& m = audio::mixer();
+    const audio::FlightSoundMix& x = audio_.mix();
+    m.set(audio::kEngineRoar, x.roar.gain, x.roar.pitch);
+    m.set(audio::kEngineWhine, x.whine.gain, x.whine.pitch);
+    m.set(audio::kAfterburner, x.afterburner.gain, x.afterburner.pitch);
+    m.set(audio::kWind, x.wind.gain, x.wind.pitch);
+    m.set(audio::kBuffet, x.buffet.gain, x.buffet.pitch);
+}
+
+void FlightScene::playOneShot(const audio::Sound& sound, float gain, float pan) {
+    audio::Mixer& m = audio::mixer();
+    m.play(m.nextOneShot(), &sound, gain, 1.0f, pan);
 }
 
 void FlightScene::restart() {
@@ -37,6 +78,8 @@ void FlightScene::restartAt(const math::Vec3& pos, float speed) {
     model_.reset(pos, math::Quat{}, speed);
     camera_.reset(model_.state());
     effects_.reset();
+    audio_.reset();
+    informer_.reset();
     accumulator_ = 0.0f;
     crashTimer_ = 0.0f;
     prevAfterburner_ = false;
@@ -101,9 +144,28 @@ void FlightScene::stepSimulation(const game::ControlInput& in) {
     // Mach 1 itself is uneventful for the pilot (docs/decisions/0020): no
     // camera kick. The script photographs the clean supersonic flight after it.
     if (effects_.takeMachOne() && autopilot_) eventShotAt_ = simStep_ + 150;
-    if (s.afterburner && !prevAfterburner_) camera_.impulse(0.06f);
+    if (s.afterburner && !prevAfterburner_) {
+        camera_.impulse(0.06f);
+        playOneShot(assets_.abLight, 0.9f);
+    }
     prevAfterburner_ = s.afterburner;
-    if (s.crashed && !wasCrashed && autopilot_) eventShotAt_ = simStep_ + 25;
+
+    // --- Sound: loop levels, cartridge pops, the crash, the voice informer.
+    audio_.update(s, effects_.engine(), effects_.transonic(), kStep);
+    const int released = flares_.justReleased();
+    if (released >= 0) {
+        // Pan by which block fired: left/right of the fuselage as seen from behind.
+        const float side = math::dot(flares_.flare(released).pos - s.position, s.orientation.right());
+        playOneShot(assets_.flare, 0.7f, side > 0.0f ? 0.45f : -0.45f);
+    }
+    if (s.crashed && !wasCrashed) {
+        playOneShot(assets_.explosion, 1.0f);
+        audio::mixer().stop(audio::kVoice);
+        if (autopilot_) eventShotAt_ = simStep_ + 25;
+    }
+    const audio::Message say = informer_.update(s, kStep);
+    if (say != audio::Message::None)
+        audio::mixer().play(audio::kVoice, &assets_.voice[static_cast<int>(say)], 1.0f);
     time_ += kStep;
 }
 
@@ -121,6 +183,7 @@ void FlightScene::update(const platform::Pad& pad, float dt) {
         }
     }
     if (accumulator_ > kStep) accumulator_ = 0.0f;  // fell behind: drop time, don't spiral
+    updateAudio();
 }
 
 gfx::MeshPose FlightScene::pose() const {

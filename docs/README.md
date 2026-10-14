@@ -33,6 +33,7 @@
 - [0021 — HUD: компоновка между истребительным индикатором и Ace Combat](decisions/0021-hud-layout-v2.md)
 - [0022 — ловушки: место выброса и баллистика](decisions/0022-flare-dispensers-v2.md)
 - [0023 — трансзвуковое облако из клубов конденсата](decisions/0023-transonic-cloud-puffs.md)
+- [0024 — звук: микшер, звуки самолёта, речевой информатор (фразы РИ-65)](decisions/0024-sound.md)
 
 ## Знания о PSP
 - [psp/gotchas.md](psp/gotchas.md) — ловушки железа, GE, прошивки и тулчейна (с пометкой, где проверено)
@@ -43,6 +44,8 @@
 - [formats/fsm4.md](formats/fsm4.md) — меш с подвижными частями (текущий)
 - [formats/fsm3.md](formats/fsm3.md) — меш, предыдущая версия (история)
 - [formats/ftx2.md](formats/ftx2.md) — текстура (модели и окружение)
+- [formats/wav.md](formats/wav.md) — звук: подмножество WAV, которое читает игра
 
 ## Ассеты
 - [assets/su35s.md](assets/su35s.md) — Су-35С
+- [assets/sound.md](assets/sound.md) — звуки и фразы речевого информатора

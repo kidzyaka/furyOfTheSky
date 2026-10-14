@@ -36,6 +36,8 @@ cmake -B build/host && cmake --build build/host && ctest --test-dir build/host  
 tools/smoke_test.sh                        # прогон в PPSSPP (software renderer) + скриншоты
 python3 tools/textures/env.py              # текстуры окружения
 python3 tools/textures/fx.py               # текстуры эффектов и HUD
+python3 tools/audio/sfx.py && python3 tools/audio/voice.py   # звуки и фразы информатора
+build/host/audio_preview                   # саундтрек вылета через настоящий микшер → build/audio_preview.wav
 tools/deploy.sh                            # копирование на PSP в режиме USB
 /Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup \
     --python tools/models/build.py -- su35s   # пересборка модели, превью в build/previews/
@@ -44,7 +46,7 @@ tools/deploy.sh                            # копирование на PSP в 
 Перед тем как отдавать сборку на железо: host-тесты и `tools/smoke_test.sh` должны пройти
 (нет `Unknown syscall`, скриншоты осмысленные). Подробности — `docs/workflow.md`.
 
-`src/game`, `src/fx` и `src/math` — платформенно-нейтральные: **никаких заголовков PSP** (их собирают host-тесты).
+`src/game`, `src/fx`, `src/audio` и `src/math` — платформенно-нейтральные: **никаких заголовков PSP** (их собирают host-тесты).
 
 ## Известные ловушки (полный список — docs/psp/gotchas.md)
 
@@ -59,3 +61,5 @@ tools/deploy.sh                            # копирование на PSP в 
 - Ближняя плоскость не меньше 3 м, у камеры — только мелкие треугольники (иначе GE их отбрасывает, №19).
 - Готовый кадр читать только в `overlay` (после `sceGuSync`): GE рисует, пока CPU пишет список (№23).
 - Меш — FSM4 с подвижными частями; новый руль = `joint()` + `lifting_surface(movers=…)` (ADR 0015).
+- Звук (ADR 0024): игра только шлёт команды `audio::mixer()` (без блокировок, у Allegrex нет LL/SC); новый звук =
+  WAV 22 050 моно 16 бит из `tools/audio` + поле в `Assets`. `int32_t` на PSP — `long` (№27).

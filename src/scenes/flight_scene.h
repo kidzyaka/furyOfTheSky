@@ -1,5 +1,7 @@
 #pragma once
 
+#include "audio/flight_audio.h"
+#include "audio/voice_informer.h"
 #include "fx/aircraft_fx.h"
 #include "game/chase_camera.h"
 #include "game/control_surfaces.h"
@@ -19,7 +21,8 @@ public:
     FlightScene(Assets& assets, Settings& settings);
 
     const char* name() const override { return "Flight test"; }
-    void enter() override { restart(); }
+    void enter() override;
+    void leave() override;
     void update(const platform::Pad& pad, float dt) override;
     void render() override;
     void overlay(void* drawBuffer) override;
@@ -44,6 +47,9 @@ private:
     void stepSimulation(const game::ControlInput& in);
     void restartAt(const math::Vec3& pos, float speed);
     gfx::MeshPose pose() const;
+    void startLoops();
+    void updateAudio();
+    void playOneShot(const audio::Sound& sound, float gain, float pan = 0.0f);
 
     Assets& assets_;
     Settings& settings_;
@@ -52,6 +58,8 @@ private:
     game::ControlSurfaces surfaces_;
     game::Countermeasures flares_;
     fx::AircraftEffects effects_;
+    audio::FlightAudio audio_;
+    audio::VoiceInformer informer_;
     gfx::Sky sky_;
     gfx::Ocean ocean_;
     gfx::Clouds clouds_;

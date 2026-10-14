@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 
+#include "game/warnings.h"
 #include "render/gu_context.h"
 #include "render/view.h"
 
@@ -195,9 +196,8 @@ void drawFlightHud(HudCanvas& c, const game::FlightState& s, const game::Counter
     c.text(464.0f, 250.0f, buf, kText, HudCanvas::kRight);
 
     // --- Warnings and modes, one at a time (priority order).
-    const float vs = s.pathDir.y * s.speed;
-    const float toImpact = s.position.y / std::max(-vs, 1.0f);
-    if (vs < -20.0f && toImpact < 4.5f && s.position.y < 900.0f) {
+    // Same rule as the voice informer's "переведи в набор" (game/warnings.h).
+    if (game::groundWarning(s) == game::GroundWarning::PullUp) {
         if (blink) warning(c, "PULL UP", kRed);
     } else if (s.psm) {
         warning(c, "PSM", kAmber);

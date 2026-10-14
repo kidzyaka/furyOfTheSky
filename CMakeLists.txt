@@ -9,6 +9,10 @@ set(SIM_SOURCES
     src/game/countermeasures.cpp
     src/fx/particles.cpp
     src/fx/aircraft_fx.cpp
+    src/audio/mixer.cpp
+    src/audio/wav.cpp
+    src/audio/flight_audio.cpp
+    src/audio/voice_informer.cpp
 )
 
 if(NOT PSP)
@@ -25,6 +29,16 @@ if(NOT PSP)
     target_compile_features(fx_tests PRIVATE cxx_std_17)
     target_compile_options(fx_tests PRIVATE -Wall -Wextra)
     add_test(NAME effects COMMAND fx_tests)
+    add_executable(audio_tests tests/audio_test.cpp ${SIM_SOURCES})
+    target_include_directories(audio_tests PRIVATE src)
+    target_compile_features(audio_tests PRIVATE cxx_std_17)
+    target_compile_options(audio_tests PRIVATE -Wall -Wextra)
+    add_test(NAME audio COMMAND audio_tests)
+    # Offline listening: the sortie's soundtrack through the real mixer.
+    add_executable(audio_preview tools/audio/preview.cpp ${SIM_SOURCES})
+    target_include_directories(audio_preview PRIVATE src)
+    target_compile_features(audio_preview PRIVATE cxx_std_17)
+    target_compile_options(audio_preview PRIVATE -Wall -Wextra)
     add_executable(ge_precision_tests tests/ge_precision_test.cpp)
     target_compile_features(ge_precision_tests PRIVATE cxx_std_17)
     add_test(NAME ge_precision COMMAND ge_precision_tests)
@@ -35,6 +49,7 @@ add_executable(fury
     src/main.cpp
     ${SIM_SOURCES}
     src/core/file.cpp
+    src/platform/psp_audio.cpp
     src/platform/psp_input.cpp
     src/platform/psp_system.cpp
     src/render/clouds.cpp
@@ -71,7 +86,7 @@ target_compile_options(fury PRIVATE
 # NOTE: never add pspkernel here - it pulls kernel-mode import stubs into a
 # user-mode module and the game dies with a black screen (docs/psp/gotchas.md #1).
 target_link_libraries(fury PRIVATE
-    pspgum pspgu pspge pspdisplay pspctrl psprtc psppower pspdebug m
+    pspgum pspgu pspge pspdisplay pspctrl pspaudio psprtc psppower pspdebug m
 )
 
 # Memory-stick layout: copy the whole folder to ms0:/PSP/GAME/

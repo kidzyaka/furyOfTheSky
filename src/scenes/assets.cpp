@@ -1,5 +1,7 @@
 #include "scenes/scene.h"
 
+#include <cstdio>
+
 namespace scenes {
 
 bool Assets::load() {
@@ -33,7 +35,35 @@ bool Assets::load() {
             return false;
         }
     }
+    struct SoundFile {
+        audio::Sound* sound;
+        const char* name;
+    };
+    const SoundFile sounds[] = {
+        {&roar, "engine_roar"}, {&whine, "engine_whine"}, {&afterburner, "afterburner"},
+        {&wind, "wind"},        {&buffet, "buffet"},      {&abLight, "ab_light"},
+        {&flare, "flare"},      {&explosion, "explosion"}, {&uiMove, "ui_move"},
+        {&uiSelect, "ui_select"},
+    };
+    for (const auto& f : sounds)
+        if (!loadSound(*f.sound, f.name)) return false;
+    for (int i = 0; i < audio::kMessageCount; ++i)
+        if (!loadSound(voice[i], audio::messageFile(static_cast<audio::Message>(i)))) return false;
     return true;
+}
+
+bool Assets::loadSound(audio::Sound& sound, const char* name) {
+    std::snprintf(soundError_, sizeof soundError_, "assets/sfx/%s.wav", name);
+    if (soundCount_ < kMaxSounds) {
+        core::Blob& blob = soundData_[soundCount_];
+        blob = core::loadFile(soundError_);
+        if (blob && audio::parseWav(blob.data, blob.size, sound)) {
+            ++soundCount_;
+            return true;
+        }
+    }
+    error = soundError_;
+    return false;
 }
 
 }  // namespace scenes
