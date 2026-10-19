@@ -12,9 +12,14 @@ import math
 
 import numpy as np
 
+import r73
+import r77
 from fmodel import (CH_FLAPERON, CH_NOZZLE, CH_RUDDER, CH_SLAT, CH_STABILATOR, MeshBuilder, airfoil,
-                    arc_ring, camo, fin_rings, lifting_surface, mix, se_ring, smoothstep, spline, star_sdf,
+                    arc_ring, camo, fin_rings, lerp, lifting_surface, mix, se_ring, smoothstep, spline, star_sdf,
                     station_at, surface_coords, wing_rings, fbm)
+
+# Distant copy for other aircraft (docs/decisions/0032), triangles.
+LOD_TRIS = 1500
 
 NACELLE_X = 1.15
 NOZZLE_Z = -0.24
@@ -46,6 +51,62 @@ RUDDER = dict(s0=0.12, s1=0.86, f0=0.70, f1=1.0)
 STAB_PIVOT_Y = -7.55                                  # stabilator spindle, at the boom
 NOZZLE_PIVOT_Y = -8.45                                # nozzle swivel ring
 NOZZLE_CANT = math.radians(32)                        # deflection plane, outboard of vertical
+
+
+# Weapon stations (right side; the left mirrors x). Missile centre in GAME
+# body axes (x right, y up, z aft), metres - the game hangs the missiles here.
+# Checked by ray casts against this mesh (docs/assets/su35s.md, "Подвеска").
+STATIONS = [
+    dict(name="wingtip", missile="r73", pos=(7.15, -0.37, 4.10), launcher=None),
+    dict(name="outer", missile="r73", pos=(5.60, -0.57, 3.40), launcher="P-72-1"),
+    dict(name="middle", missile="r77", pos=(4.40, -0.62, 2.90), launcher="AKU-170"),
+    dict(name="inner", missile="r77", pos=(3.00, -0.59, 2.10), launcher="AKU-170"),
+    dict(name="intake", missile="r77", pos=(1.15, -1.36, -0.80), launcher="AKU-170"),
+]
+MISSILES = {"r73": r73, "r77": r77}
+# Launcher: span along the missile (d from its nose), height, half-width.
+LAUNCHERS = {"P-72-1": dict(d0=0.50, d1=2.95, h=0.15, hw=0.055),
+             "AKU-170": dict(d0=0.95, d1=2.65, h=0.15, hw=0.065)}
+PYLON_FOIL = airfoil([0.25, 0.70], lower=1.0)          # 6-point ring
+
+
+def wing_chord_z(x):
+    """Chord-line height of the wing at span position x (inside the skin)."""
+    s = (x - WING[0]["x"]) / (WING[1]["x"] - WING[0]["x"])
+    return lerp(WING[0]["z"], WING[1]["z"], s)
+
+
+def stores(mb):
+    """Pylons (airframe skin) and launchers under the wing and the intakes.
+    Each launcher's underside touches its missile; the pylon runs from inside
+    the wing/nacelle into the launcher, so neither end needs a cap."""
+    for st in STATIONS:
+        if not st["launcher"]:
+            continue
+        m, ln = MISSILES[st["missile"]], LAUNCHERS[st["launcher"]]
+        gx, gy, gz = st["pos"]
+        nose_y = m.LENGTH / 2 - gz                      # Blender y of the missile nose
+        bottom = gy + m.RADIUS - 0.003                  # launcher underside, 3 mm into the missile
+        top = bottom + ln["h"]
+        y0, y1 = nose_y - ln["d0"], nose_y - ln["d1"]
+        hw, hh = ln["hw"], 0.5 * ln["h"]
+
+        def section(y, k, n):
+            # 6-gon with flat top/bottom; its flat lies sin(60)^(2/n) of the
+            # half-height from the centre - keep every flat on `bottom`.
+            flat = math.sin(math.radians(60)) ** (2.0 / n)
+            return se_ring(y, gx, bottom + flat * hh * k, hw * k, hh * k, hh * k, n=n, seg=6)
+
+        mb.loft([section(y0, 0.45, 2.2), section(y0 - 0.32, 1.0, 3.0), section(y1 + 0.06, 0.85, 3.0)],
+                "launcher", smooth=70)
+
+        under_wing = gx > 2.0
+        root_z = wing_chord_z(gx) if under_wing else -0.75   # buried in the wing / nacelle
+        le, chord = y0 - 0.20, (y0 - y1) - 0.40
+        t = 0.07 if under_wing else 0.06
+        pylon = [dict(x=gx, y=le + 0.10, z=root_z, chord=chord + 0.10, t=t),
+                 dict(x=gx, y=le, z=top - 0.02, chord=chord, t=t * 0.9)]
+        mb.loft(fin_rings(pylon, 1, PYLON_FOIL), "pylon", smooth=70, cap_start=False, cap_end=False)
 
 
 def hinge(stations, s0, s1, f):
@@ -145,9 +206,13 @@ def build():
     mb.loft(wing_rings(STAB, 3, THIN_FOIL), "stab", smooth=110, joint=stab)
     mb.loft(fin_rings(VENTRAL, 1, THIN_FOIL), "ventral", smooth=110)
 
-    # Wingtip launch rails, protruding ahead of the leading edge.
-    rail = spline([(-3.05, 0.015, 0.02), (-3.40, 0.075, 0.095), (-6.10, 0.08, 0.10), (-6.40, 0.02, 0.03)], 1)
-    mb.loft([se_ring(y, 7.15, -0.13, hw, h, n=3.0, seg=8) for y, hw, h in rail], "rail", smooth=60)
+    # Wingtip launch rails, protruding ahead of the leading edge. Deep below the
+    # axis: the R-73 hangs under it, low enough for its upper wings to clear
+    # the wing tip (STATIONS["wingtip"]).
+    rail = spline([(-3.05, 0.015, 0.02, 0.03), (-3.40, 0.075, 0.095, 0.158), (-6.10, 0.08, 0.10, 0.158),
+                   (-6.40, 0.02, 0.03, 0.04)], 1)
+    mb.loft([se_ring(y, 7.15, -0.13, hw, h, hb, n=3.0, seg=8) for y, hw, h, hb in rail], "rail", smooth=60)
+    stores(mb)
 
     # Tail booms outboard of the nacelles carrying fins and stabilators.
     boom = spline([(-3.60, 0.10, 0.05, 0.04), (-4.60, 0.28, 0.17, 0.04), (-7.00, 0.28, 0.18, 0.03),
@@ -167,7 +232,7 @@ HATCHES = [(5.45, -0.18, 0.40, 0.16), (4.20, 0.28, 0.32, 0.14), (-2.60, 0.30, 0.
 NACELLE_HATCHES = [(0.90, -0.42, 0.55, 0.18), (-2.40, -0.40, 0.45, 0.16), (-5.60, -0.30, 0.40, 0.14)]
 
 SKIN_PARTS = ("fuselage", "spine", "nacelle", "lerx", "wing", "slat", "flap", "boom", "fin", "rudder", "stab",
-              "ventral")
+              "ventral", "pylon")
 
 
 def _rect_sdf(a, b, ca, cb, ha, hb):
@@ -264,6 +329,7 @@ def paint(m, lv):
     # Small parts.
     mix(img, (8, 8, 10), m.is_part("intake").astype(np.float32))
     mix(img, (126, 130, 134), m.is_part("rail").astype(np.float32))
+    mix(img, lv.get("launcher", (112, 118, 124)), m.is_part("launcher").astype(np.float32))
     mix(img, (150, 152, 154), m.is_part("pitot").astype(np.float32))
     irst = m.is_part("irst").astype(np.float32)
     mix(img, (52, 48, 34), irst)

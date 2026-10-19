@@ -7,12 +7,34 @@ set(SIM_SOURCES
     src/game/chase_camera.cpp
     src/game/control_surfaces.cpp
     src/game/countermeasures.cpp
+    src/game/autopilot.cpp
+    src/game/combat.cpp
+    src/game/radar.cpp
+    src/game/missile.cpp
+    src/game/gun.cpp
+    src/game/armament.cpp
+    src/game/bot.cpp
+    src/game/rwr.cpp
+    src/game/boundary.cpp
+    src/game/ship.cpp
     src/fx/particles.cpp
     src/fx/aircraft_fx.cpp
+    src/fx/weapon_fx.cpp
+    src/fx/precipitation.cpp
+    src/fx/water_marks.cpp
+    src/fx/ship_fx.cpp
     src/audio/mixer.cpp
     src/audio/wav.cpp
     src/audio/flight_audio.cpp
     src/audio/voice_informer.cpp
+    src/meta/catalog.cpp
+    src/meta/profile.cpp
+    src/meta/sortie.cpp
+    src/world/environment.cpp
+    src/world/sea.cpp
+    src/world/terrain.cpp
+    src/world/rock_shapes.cpp
+    src/world/missions.cpp
 )
 
 if(NOT PSP)
@@ -34,12 +56,33 @@ if(NOT PSP)
     target_compile_features(audio_tests PRIVATE cxx_std_17)
     target_compile_options(audio_tests PRIVATE -Wall -Wextra)
     add_test(NAME audio COMMAND audio_tests)
+    add_executable(combat_tests tests/combat_test.cpp ${SIM_SOURCES})
+    target_include_directories(combat_tests PRIVATE src)
+    target_compile_features(combat_tests PRIVATE cxx_std_17)
+    target_compile_options(combat_tests PRIVATE -Wall -Wextra)
+    add_test(NAME combat COMMAND combat_tests)
+    add_executable(meta_tests tests/meta_test.cpp ${SIM_SOURCES})
+    target_include_directories(meta_tests PRIVATE src)
+    target_compile_features(meta_tests PRIVATE cxx_std_17)
+    target_compile_options(meta_tests PRIVATE -Wall -Wextra)
+    add_test(NAME meta COMMAND meta_tests)
     # Offline listening: the sortie's soundtrack through the real mixer.
     add_executable(audio_preview tools/audio/preview.cpp ${SIM_SOURCES})
     target_include_directories(audio_preview PRIVATE src)
     target_compile_features(audio_preview PRIVATE cxx_std_17)
     target_compile_options(audio_preview PRIVATE -Wall -Wextra)
+    add_executable(world_tests tests/world_test.cpp ${SIM_SOURCES})
+    target_include_directories(world_tests PRIVATE src)
+    target_compile_features(world_tests PRIVATE cxx_std_17)
+    target_compile_options(world_tests PRIVATE -Wall -Wextra)
+    target_compile_definitions(world_tests PRIVATE FURY_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    add_test(NAME world COMMAND world_tests)
+    # Simulation-step benchmark (docs/decisions/0049): shares of the step.
+    add_executable(sim_bench tools/perf/sim_bench.cpp ${SIM_SOURCES})
+    target_include_directories(sim_bench PRIVATE src)
+    target_compile_features(sim_bench PRIVATE cxx_std_17)
     add_executable(ge_precision_tests tests/ge_precision_test.cpp)
+    target_include_directories(ge_precision_tests PRIVATE src)
     target_compile_features(ge_precision_tests PRIVATE cxx_std_17)
     add_test(NAME ge_precision COMMAND ge_precision_tests)
     return()
@@ -51,21 +94,39 @@ add_executable(fury
     src/core/file.cpp
     src/platform/psp_audio.cpp
     src/platform/psp_input.cpp
+    src/platform/psp_save.cpp
     src/platform/psp_system.cpp
+    src/render/cloud_deck.cpp
     src/render/clouds.cpp
+    src/render/draw2d.cpp
+    src/render/font.cpp
     src/render/fx_draw.cpp
+    src/render/grid_mesh.cpp
     src/render/gu_context.cpp
     src/render/hud_draw.cpp
     src/render/mesh.cpp
     src/render/ocean.cpp
     src/render/screenshot.cpp
     src/render/sky.cpp
+    src/render/terrain_mesh.cpp
     src/render/texture.cpp
     src/render/view.cpp
     src/scenes/assets.cpp
     src/scenes/flight_hud.cpp
     src/scenes/flight_scene.cpp
-    src/scenes/hangar_scene.cpp
+    src/scenes/menu/briefing_screen.cpp
+    src/scenes/menu/campaign_screen.cpp
+    src/scenes/menu/debrief_screen.cpp
+    src/scenes/menu/emblem_screen.cpp
+    src/scenes/menu/hangar_screen.cpp
+    src/scenes/menu/location_screen.cpp
+    src/scenes/menu/main_screen.cpp
+    src/scenes/menu/menu_scene.cpp
+    src/scenes/menu/multiplayer_screen.cpp
+    src/scenes/menu/profile_screen.cpp
+    src/scenes/menu/settings_screen.cpp
+    src/scenes/menu/training_screen.cpp
+    src/ui/ui.cpp
 )
 # Build id shown in the HUD (regenerated on every build).
 set(BUILD_INFO_CPP ${CMAKE_BINARY_DIR}/generated/build_info.cpp)
@@ -86,7 +147,7 @@ target_compile_options(fury PRIVATE
 # NOTE: never add pspkernel here - it pulls kernel-mode import stubs into a
 # user-mode module and the game dies with a black screen (docs/psp/gotchas.md #1).
 target_link_libraries(fury PRIVATE
-    pspgum pspgu pspge pspdisplay pspctrl pspaudio psprtc psppower pspdebug m
+    pspgum pspgu pspge pspdisplay pspctrl pspaudio psprtc psppower psputility pspdebug m
 )
 
 # Memory-stick layout: copy the whole folder to ms0:/PSP/GAME/

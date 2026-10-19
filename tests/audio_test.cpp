@@ -256,6 +256,31 @@ void testInformer() {
         CHECK(!said.empty() && said[0] == Message::AltitudeDanger, "'высота опасная' interrupts");
     }
     {
+        // "Пуск разрешён" is an advisory: once per entry into the zone, not a
+        // nag; a zone flickering at its edge doesn't re-trigger it.
+        auto vi = makeInformer();
+        game::FlightState s = level(250.0f);
+        vi.setLaunchAuthorized(true);
+        auto said = listen(vi, s, 8.0f);
+        CHECK(said.size() == 1 && said[0] == Message::LaunchAuthorized, "said %zu times while in zone", said.size());
+        vi.setLaunchAuthorized(false);
+        listen(vi, s, 0.5f);
+        vi.setLaunchAuthorized(true);
+        CHECK(listen(vi, s, 3.0f).empty(), "a 0.5 s dropout does not re-arm it");
+        vi.setLaunchAuthorized(false);
+        listen(vi, s, 2.0f);
+        vi.setLaunchAuthorized(true);
+        said = listen(vi, s, 3.0f);
+        CHECK(said.size() == 1, "said again after leaving the zone for 2 s");
+        // A warning outranks it.
+        auto vi2 = makeInformer();
+        s.alpha = kSu35S.alphaMax;
+        s.speed = 120.0f;
+        vi2.setLaunchAuthorized(true);
+        said = listen(vi2, s, 2.0f);
+        CHECK(!said.empty() && said[0] == Message::AoaLimit, "AoA warning first");
+    }
+    {
         auto vi = makeInformer();
         game::FlightState s = level(120.0f);
         s.alpha = 1.2f;
@@ -319,11 +344,103 @@ void testFlightAudio() {
     CHECK(fa.mix().roar.gain < 0.01f && fa.mix().wind.gain < 0.01f, "crashed: the engine falls silent");
 }
 
+
+void testMasterVolumes() {
+    std::printf("master volumes\n");
+    // The settings' 0..10 steps: 8 is the level the sounds were authored at.
+    CHECK(audio::volumeGain(0) == 0.0f && audio::volumeGain(-3) == 0.0f, "0 is silence");
+    CHECK(std::fabs(audio::volumeGain(8) - 1.0f) < 1e-6f, "8 is unity: %.4f", audio::volumeGain(8));
+    CHECK(audio::volumeGain(10) > 1.4f && audio::volumeGain(10) < 1.7f && audio::volumeGain(11) == audio::volumeGain(10),
+          "10 is a few dB above: %.3f", audio::volumeGain(10));
+    bool rising = true;
+    for (int i = 1; i <= 10; ++i) rising = rising && audio::volumeGain(i) > audio::volumeGain(i - 1);
+    CHECK(rising, "every step is louder than the last");
+    {
+        // Three groups, three masters: each channel obeys its own.
+        Mixer m;
+        Dc dc(10000, 4000, 22050);
+        m.play(audio::kWind, &dc.sound, 1.0f, 1.0f, 0.0f, true);
+        m.setVolume(audio::kVolumeSfx, 0.5f);
+        block(m);
+        block(m);
+        CHECK(allNear(0, 0, 1024, 5000, 3), "world sounds at the sfx master: %d", g_out[0]);
+        m.setVolume(audio::kVolumeVoice, 0.1f);  // not theirs
+        m.setVolume(audio::kVolumeUi, 0.1f);
+        block(m);
+        block(m);
+        CHECK(allNear(0, 0, 1024, 5000, 3), "the other masters leave them alone: %d", g_out[0]);
+    }
+    {
+        Mixer m;
+        Dc dc(10000, 4000, 22050);
+        m.play(audio::kUi, &dc.sound, 1.0f, 1.0f, 0.0f, true);
+        m.setVolume(audio::kVolumeUi, 0.25f);
+        m.setVolume(audio::kVolumeSfx, 0.0f);  // not theirs
+        m.setWorldGain(0.0f);                  // paused: the menu is the only thing heard
+        block(m);
+        block(m);
+        CHECK(allNear(0, 0, 1024, 2500, 3), "menu clicks at the ui master, through a pause: %d", g_out[0]);
+    }
+    {
+        Mixer m;
+        Dc dc(10000, 20000, 22050);
+        m.play(audio::kVoice, &dc.sound, 1.0f);
+        m.setVolume(audio::kVolumeVoice, 0.4f);
+        block(m);
+        block(m);
+        CHECK(allNear(0, 0, 1024, 4000, 3), "the informer at the voice master: %d", g_out[0]);
+    }
+    {
+        // Voice turned off: it doesn't duck the engine for a message nobody hears.
+        Mixer m;
+        Dc loop(10000, 4000, 22050), speech(5000, 20000, 22050);
+        m.play(audio::kEngineRoar, &loop.sound, 1.0f, 1.0f, 0.0f, true);
+        m.setVolume(audio::kVolumeVoice, 0.0f);
+        block(m);
+        block(m);
+        m.play(audio::kVoice, &speech.sound, 1.0f);
+        block(m);
+        block(m);
+        CHECK(allNear(0, 0, 1024, 10000, 3), "no duck for a muted voice: %d", g_out[0]);
+    }
+    {
+        // Sound effects at 0 still play out (silently) and free their slot:
+        // raising the volume later must not blurt out a stale explosion.
+        Mixer m;
+        Dc boom(8000, 3000, 22050);
+        m.setVolume(audio::kVolumeSfx, 0.0f);
+        m.play(audio::kOneShot0, &boom.sound, 1.0f);
+        block(m);
+        CHECK(allNear(0, 0, 1024, 0, 0), "muted one-shot is silent");
+        CHECK(m.active(audio::kOneShot0), "...but still running (3000 frames at 22 kHz ~ 6 blocks)");
+        for (int i = 0; i < 8; ++i) block(m);
+        CHECK(!m.active(audio::kOneShot0), "...and it frees itself in time");
+        m.setVolume(audio::kVolumeSfx, 1.0f);
+        block(m);
+        CHECK(allNear(0, 0, 1024, 0, 0), "nothing stale comes out when the volume comes back");
+    }
+    {
+        // The pause still freezes a one-shot (it resumes where it was), unlike a muted master.
+        Mixer m;
+        Dc dc(8000, 6000, 22050);
+        m.play(audio::kOneShot0, &dc.sound, 1.0f);
+        block(m, 512);
+        m.setWorldGain(0.0f);
+        for (int i = 0; i < 12; ++i) block(m);
+        CHECK(m.active(audio::kOneShot0), "paused one-shot waits");
+        m.setWorldGain(1.0f);
+        block(m);
+        block(m);
+        CHECK(g_out[0] > 7000, "...and resumes: %d", g_out[0]);
+    }
+}
+
 }  // namespace
 
 int main() {
     testWav();
     testMixer();
+    testMasterVolumes();
     testInformer();
     testFlightAudio();
     if (g_failures) {

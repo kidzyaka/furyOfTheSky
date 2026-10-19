@@ -23,7 +23,7 @@ static_assert(sizeof(FsmHeader) == 32, "FSM4 header");
 struct FsmPart {
     uint32_t first, count;
     uint16_t channel, side;
-    uint32_t reserved0;
+    uint32_t flags;  // bit 0: the indices are one triangle strip (tools/models/stripify.py)
     float pivot[3];
     float pad0;
     float axis[3];
@@ -53,7 +53,7 @@ bool Mesh::load(const char* path) {
         std::memcpy(&r, p, sizeof r);
         if (r.first + r.count > h.indexCount || r.channel >= kChannelCount) return false;
         parts_[i] = {r.first, r.count, r.channel, r.side, {r.pivot[0], r.pivot[1], r.pivot[2]},
-                     {r.axis[0], r.axis[1], r.axis[2]}};
+                     {r.axis[0], r.axis[1], r.axis[2]}, (r.flags & 1u) != 0};
     }
     // Header 32 + parts 48 each + vertices 32 each: both arrays stay 16-byte aligned.
     vertices_ = reinterpret_cast<const MeshVertex*>(p);
@@ -98,7 +98,10 @@ void Mesh::draw(const math::Vec3& worldPos, const math::Quat& rot, const MeshPos
             setModel(p, q);
             baseLoaded = false;
         }
-        sceGumDrawArray(GU_TRIANGLES, kVertexFormat, part.count, indices_ + part.first, vertices_);
+        // Strips where the exporter made them: the GE transforms every index
+        // (no vertex cache), ~2 per triangle instead of 3.
+        sceGumDrawArray(part.strip ? GU_TRIANGLE_STRIP : GU_TRIANGLES, kVertexFormat, part.count,
+                        indices_ + part.first, vertices_);
     }
 }
 

@@ -36,6 +36,13 @@ cmake -B build/host && cmake --build build/host && ctest --test-dir build/host  
 tools/smoke_test.sh                        # прогон в PPSSPP (software renderer) + скриншоты
 python3 tools/textures/env.py              # текстуры окружения
 python3 tools/textures/fx.py               # текстуры эффектов и HUD
+python3 tools/textures/ui.py               # скин меню, иконки, шрифты, плашки HUD → assets/ui + src/ui/ui_atlas.h
+/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python tools/textures/locations.py
+                                           # картинки локаций (~2,5 мин, CPU)
+/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python tools/textures/schematics.py
+                                           # схемы техники сбоку
+/Applications/Blender.app/Contents/MacOS/Blender -b --factory-startup --python tools/models/hangar.py
+                                           # ангар меню с запечённым светом (~25 с)
 python3 tools/audio/sfx.py && python3 tools/audio/voice.py   # звуки и фразы информатора (записи РИ-65: fetch_voice.py)
 build/host/audio_preview                   # саундтрек вылета через настоящий микшер → build/audio_preview.wav
 tools/deploy.sh                            # копирование на PSP в режиме USB
@@ -46,7 +53,8 @@ tools/deploy.sh                            # копирование на PSP в 
 Перед тем как отдавать сборку на железо: host-тесты и `tools/smoke_test.sh` должны пройти
 (нет `Unknown syscall`, скриншоты осмысленные). Подробности — `docs/workflow.md`.
 
-`src/game`, `src/fx`, `src/audio` и `src/math` — платформенно-нейтральные: **никаких заголовков PSP** (их собирают host-тесты).
+`src/game`, `src/fx`, `src/audio`, `src/math` и `src/meta` — платформенно-нейтральные: **никаких заголовков PSP**
+(их собирают host-тесты).
 
 ## Известные ловушки (полный список — docs/psp/gotchas.md)
 
@@ -63,3 +71,30 @@ tools/deploy.sh                            # копирование на PSP в 
 - Меш — FSM4 с подвижными частями; новый руль = `joint()` + `lifting_surface(movers=…)` (ADR 0015).
 - Звук (ADR 0024): игра только шлёт команды `audio::mixer()` (без блокировок, у Allegrex нет LL/SC); новый звук =
   WAV 22 050 моно 16 бит из `tools/audio` + поле в `Assets`. `int32_t` на PSP — `long` (№27).
+- Оружие (ADR 0026–0029): точки подвески `game::kSu35SStations` **совпадают** с пилонами в `tools/models/su35s.py`
+  (меняются вместе). Ракеты/РЛС/цель — `src/game`, host-тесты `combat_tests`. Управление — раскладка Ace Combat X
+  (ADR 0030): R/L газ/тормоз, ✕ пушка, ○ ракета, △ цель, SELECT ракета, □ ловушки, L+ручка на себя — ПСМ.
+- **FPS — только на железе** (PPSSPP рисует GE мгновенно). В углу `S/L/G` мс: симуляция / список / ожидание GE.
+  GE освещает каждую вершину по каждому источнику: чужие самолёты — LOD `su35s_lod` + `enableDistantLight` +
+  `sphereVisible` (ADR 0032). На железе: 30 FPS в целом, 20 со вторым полным Су-35С в кадре (до LOD).
+- HUD v3 (ADR 0049): текст — `HudCanvas::label` гранью `ui::HudFace` (растровый, с обводкой, ≥ 13 px), подложка —
+  только под плотной группой; тревоги — плашки из `tools/textures/ui.py` (`HUD_PLATES`) в три уровня; ничего не
+  рисовать на самолёте (зона под y = 138), лестница уступает место тревогам и цели. Захват постепенный: кольцо
+  `Armament::lockDir/lockProgress`, время — `MissileParams::lockTime` (ADR 0050).
+- Меню (ADR 0035): экраны — `menu::Screen` в `src/scenes/menu/`, по файлу на экран, только из UI-кита
+  (`ui::button / panel / text / bottomBar`); текст не мельче 13 px, кнопки 32/28 px; новые иконки и плиты — в
+  `tools/textures/ui.py` (`src/ui/ui_atlas.h` генерируется, руками не править). Контент кампании и правила —
+  `src/meta` (ADR 0037), host-тест `meta`; порядок техники/локаций/миссий — часть формата сохранения.
+- Противник — `game::Bot` (ADR 0033): та же физика и оружие, что у игрока, уровни — только решения пилота
+  (`BotSkill`). Баланс проверяют дуэли бот против бота в `combat_tests`. СПО — `game::Rwr` (ADR 0034).
+- Мир — `src/world` (платформенно-нейтрально, host-тест `world`): погода/время (ADR 0041), море кольцами LOD
+  «плитка ≤ 1/3 расстояния» (ADR 0040), рельеф и миссии (ADR 0042, 0046). Скалы и острова — **одна таблица на меш
+  и столкновение**: `tools/models/rocks.py` пишет `rock_*.ftr` (FTR2 через `ftr2.py`, свет скал запекается в цвет при старте вылета — ADR 0051) и `src/world/rock_shapes.cpp` (руками не
+  править; правка формы — только в генераторе, потом host-тесты). Большие треугольники у камеры GE выбрасывает —
+  куски рельефа у глаза режутся `render/guard_clip.h`. Регулярные сетки — лентами: GE трансформирует каждый индекс
+  (gotchas №31). Корабли — `game::Ship` (ADR 0045), граница — `game::Boundary` (ADR 0043). Целевое железо — только
+  64 МБ (ADR 0047). Счётчики рельефа в углу: `T` треугольники, `V` индексы, `c` отсечено программно; строкой ниже — мс CPU по частям
+  списка: `O` море, `R` скалы, `A` самолёты, `C` облака/число, `F` эффекты, `H` HUD. Облака — четырёхугольники по
+  горизонту (не `GU_SPRITES`, gotchas №32). Строка `Z` — те же части, нарисованные по одной с ожиданием GE (каждый
+  64-й кадр): много больше строки над ней — часть упирается в GE. Стоимость шага симуляции — `build/host/sim_bench`.
+  Меши FSM4 — лентами (`tools/models/stripify.py` из экспорта).

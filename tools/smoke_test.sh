@@ -1,26 +1,53 @@
 #!/usr/bin/env bash
 # Emulator smoke test (dev Mac only, see docs/psp/emulator.md).
 # Runs the built game from PPSSPP's own memory stick with the `autoshot` hook:
-# the game flies a scripted sortie through every effect (8 shots: cruise, AB turn
-# with vapor, flares, cobra, vapor cone, sonic boom, low pass, crash), visits the
-# hangar (1 shot), quits. Fails on unresolved imports.
-# Output: build/smoke/shot_*.png and build/smoke/ppsspp.log
+# 1. the menu tour (21 shots, kTour in src/scenes/menu/menu_scene.cpp): main
+#    menu, SINGLEPLAYER drawer (+ cursor on TRAINING), training, campaign
+#    carousel (+ slid), location, briefing pages x4, hangar, shop, profile,
+#    callsign keyboard, emblem gallery, settings, multiplayer, lobbies,
+#    debriefing of a won and of a lost mission;
+# 2. a scripted sortie through every effect and the weapons (27 shots: cruise,
+#    AB turn with vapor, flares, cobra, transonic cloud, supersonic, R-73 locked,
+#    launch, smoke trail, the hit, R-77 ejected, gun burst, a HARD bot's radar
+#    lock on the RWR, its missile warning, low pass, crash; then the weathers:
+#    cloudy dawn, under / above the overcast, storm at dusk, snow, low over the
+#    storm's waves; then the map: the Gates' stacks, a pass at 8 m over the
+#    sea, the western islet; two patrol ships ahead, then firing at us), then quits.
+# Fails on unresolved imports.
+#
+#   SMOKE_BUILD=build/psp-foo tools/smoke_test.sh   # another build dir (default build/psp)
+#   SMOKE_EXPECTED=16 ...                           # expected screenshot count (default 54)
+# Output: build/smoke[-foo]/shot_*.png and ppsspp.log. Runs are serialised by a
+# lock (build/.smoke_lock): PPSSPP's memory stick folder is shared.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DIST="$ROOT/build/psp/FuryOfTheSky"
-OUT="$ROOT/build/smoke"
+BUILD="${SMOKE_BUILD:-build/psp}"
+DIST="$ROOT/$BUILD/FuryOfTheSky"
+SUFFIX="${BUILD#build/psp}"
+OUT="$ROOT/build/smoke${SUFFIX}"
 PPSSPP=/Applications/PPSSPPSDL.app/Contents/MacOS/PPSSPPSDL
+# Silent by default: the author asked not to have the emulator blaring (SDL dummy driver).
+export SDL_AUDIODRIVER="${SDL_AUDIODRIVER:-dummy}"
 CFG="$HOME/.config/ppsspp/PSP"
 MS="$CFG/GAME/FuryOfTheSky"
 
 [[ -x "$PPSSPP" ]] || { echo "PPSSPP missing: brew install --cask ppsspp"; exit 1; }
-[[ -f "$DIST/EBOOT.PBP" ]] || { echo "Not built: cmake --build build/psp"; exit 1; }
+[[ -f "$DIST/EBOOT.PBP" ]] || { echo "Not built: cmake --build $BUILD"; exit 1; }
+
+LOCK="$ROOT/build/.smoke_lock"
+mkdir -p "$ROOT/build"
+for _ in $(seq 1 900); do
+    mkdir "$LOCK" 2>/dev/null && break
+    sleep 1
+done
+[[ -d "$LOCK" ]] || { echo "Could not take $LOCK"; exit 1; }
+trap 'rm -rf "$LOCK"' EXIT
 
 # Static check first: a user-mode module must not import kernel libraries.
 # (Captured into a variable: `strings | grep -q` under pipefail reports failure
 # when grep exits early and strings dies of SIGPIPE.)
-kernel_imports="$(strings "$ROOT/build/psp/fury" | grep 'ForKernel' | sort -u || true)"
+kernel_imports="$(strings "$ROOT/$BUILD/fury" | grep 'ForKernel' | sort -u || true)"
 if [[ -n "$kernel_imports" ]]; then
     echo "FAIL: kernel-mode imports in the ELF (is pspkernel linked?)"
     echo "$kernel_imports"
@@ -38,9 +65,9 @@ rm -f "$OUT"/shot_*.png "$OUT/ppsspp.log"   # PPSSPP appends to an existing log
 
 "$PPSSPP" --log="$OUT/ppsspp.log" -d "$MS/EBOOT.PBP" >/dev/null 2>&1 &
 PID=$!
-EXPECTED=9
+EXPECTED=${SMOKE_EXPECTED:-54}  # 21 menu tour + 33 sortie
 LAST="$MS/screenshots/shot_$(printf %03d $((EXPECTED - 1))).bmp"
-for _ in $(seq 1 240); do
+for _ in $(seq 1 480); do
     sleep 1
     [[ -f "$LAST" ]] && break
 done

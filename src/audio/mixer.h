@@ -17,15 +17,31 @@ enum Channel : uint8_t {
     kAfterburner,    // roar + crackle
     kWind,           // airflow over the airframe, grows with dynamic pressure
     kBuffet,         // low rumble: high AoA, G, transonic buffet
-    kOneShot0,       // flares, afterburner light-up, explosion (round robin)
+    kOneShot0,       // flares, light-up, explosions, launches, hits (round robin)
     kOneShot1,
     kOneShot2,
     kOneShot3,
+    kGun,            // cannon burst loop while the trigger is held (not ducked)
+    kTone,           // missile seeker / lock tone in the headset (not ducked)
+    kRwr,            // radar warning receiver: lock / missile tones (not ducked)
     kVoice,          // voice warning system (RI-65), one message at a time
     kUi,             // menu clicks: not muted by the pause duck
     kChannelCount
 };
 constexpr int kOneShotCount = 4;
+
+// Master volumes (the settings screen, docs/decisions/0038): one gain per
+// group of channels, on top of every channel's own level.
+enum VolumeGroup : uint8_t {
+    kVolumeSfx,    // everything in the world: engines, wind, weapons, warnings tones
+    kVolumeVoice,  // kVoice, the RI-65 informer
+    kVolumeUi,     // kUi, menu clicks
+    kVolumeGroupCount
+};
+// The setting's 0..10 steps as a gain: 8 (the default) is the level the
+// sounds were authored at, 10 is +4 dB for a quiet PSP speaker (the limiter
+// catches the peaks), 0 is silence; in between it is a square law.
+float volumeGain(int step);
 
 // Software mixer: any number of mono clips, resampled (linear interpolation),
 // gain/pan-ramped per block, summed into interleaved stereo with a peak limiter.
@@ -45,6 +61,8 @@ public:
     void stop(int channel);
     // Gain of every channel except kUi (pause menu ducking), ramped.
     void setWorldGain(float gain);
+    // Master gain of a group of channels (see VolumeGroup), ramped; 1 = as authored.
+    void setVolume(VolumeGroup group, float gain);
     // Next one-shot slot, round robin.
     int nextOneShot();
 
@@ -55,7 +73,7 @@ public:
     bool active(int channel) const { return voices_[channel].sound != nullptr; }
 
 private:
-    enum Op : uint8_t { kPlay, kSet, kStop, kWorldGain };
+    enum Op : uint8_t { kPlay, kSet, kStop, kWorldGain, kVolume };
     struct Command {
         Op op;
         uint8_t channel;
@@ -75,7 +93,7 @@ private:
 
     void push(const Command& c);
     void apply(const Command& c);
-    void mixVoice(Voice& v, bool world, float duck, int frames);
+    void mixVoice(Voice& v, int channel, float duck, int frames);
 
     static constexpr unsigned kRing = 64;  // power of two
     Command ring_[kRing];
@@ -84,6 +102,7 @@ private:
 
     Voice voices_[kChannelCount];
     float worldGain_ = 1.0f;
+    float volume_[kVolumeGroupCount] = {1.0f, 1.0f, 1.0f};
     int32_t limiter_ = 1 << 14;  // Q14
     int32_t acc_[kMaxBlock * 2];
     int oneShot_ = 0;  // game side

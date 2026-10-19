@@ -33,8 +33,10 @@ from mathutils.bvhtree import BVHTree
 
 import ftx  # noqa: E402  (tools/pipeline)
 
+# Atlas size. Read at call time everywhere below: build.py sets it per model
+# from the model module's own TEX (default 512; missiles use 128).
 TEX = 512
-MIP_LEVELS = 4          # 512, 256, 128, 64
+MIP_LEVELS = 4          # 512 -> 64; 128 -> 16 (ftx.mip_levels stops at 16 texels)
 
 
 def lerp(a, b, t):
@@ -133,6 +135,22 @@ def fin_rings(stations, steps=1, foil=None):
             for p in surface_stations(stations, steps)]
 
 
+def radial_fin_rings(stations, angle, foil, steps=1):
+    """Fin of a body of revolution along Y (missile), lofted outwards in the
+    plane at `angle` (degrees from +X towards +Z, i.e. 45 = upper right).
+    stations: dicts(r, y, chord, t), root first; y = leading edge, r = radial
+    distance of the station from the axis."""
+    a = math.radians(angle)
+    er = Vector((math.cos(a), 0.0, math.sin(a)))
+    et = Vector((-math.sin(a), 0.0, math.cos(a)))
+    return [[er * p["r"] + et * (k * p["t"] * 0.5) + Vector((0.0, p["y"] - f * p["chord"], 0.0))
+             for f, k in foil] for p in surface_stations(stations, steps)]
+
+
+# Thin missile fin: a diamond with its ridge at 40 % chord (flat shaded).
+DIAMOND = [(0.0, 0.0), (0.4, 1.0), (1.0, 0.0), (0.4, -1.0)]
+
+
 def surface_coords(pos, stations, span_axis):
     """For texels on a lifting surface: (span fraction s, chord fraction f,
     chord length) relative to its root/tip stations - drives panel lines."""
@@ -211,6 +229,8 @@ def lifting_surface(mb, stations, rings_fn, foil, part, smooth, steps, movers=()
         ring, flat = chord_slice(foil, m["f0"], m["f1"])
         mb.loft(rings_fn(sts, 1, ring), m["part"], smooth, flat_edges=flat, joint=m["joint"])
 
+
+LOD_PLANAR_DEG = 6.0    # planar pass of export_lod
 
 # Articulation channels - must match gfx::MeshChannel (src/render/mesh.h).
 # Positive angles are mirror-symmetric (both sides move alike):
@@ -300,11 +320,82 @@ class MeshBuilder:
                 faces.append(f)
         bmesh.ops.recalc_face_normals(self.bm, faces=faces)
 
+    def _face(self, verts, pid, group, joint=0):
+        f = self.bm.faces.new(verts)
+        f[self.l_part], f[self.l_group], f[self.l_joint] = pid, group, joint
+        return f
+
+    def revolve(self, profile, part, smooth=60.0, seg=12, cx=0.0, cz=0.0, cap_part=None, breaks=()):
+        """Body of revolution about a line parallel to Y (missiles).
+        profile: (y, r) from the nose to the tail. An end with r == 0 closes in
+        a point (a fan - no wasted cap ring); otherwise it gets a flat cap
+        (cap_part, e.g. a nozzle exit). seg should be a multiple of 4 so that
+        ring vertices lie on x = cx: the mirror cut then adds no triangles.
+        breaks: profile indices where the shell is split (the ring is doubled,
+        not welded) - shorter UV islands pack far better than one long strip.
+        Put them on straight cylinder stretches: normals there are radial on
+        both sides, so the split does not show."""
+        pid = self.part_id(part, smooth)
+        cap_pid = self.part_id(cap_part, smooth) if cap_part else pid
+        side = self._group(smooth)
+
+        def ring(y, r):
+            return [self.bm.verts.new((cx + r * math.cos(2 * math.pi * i / seg), y,
+                                       cz + r * math.sin(2 * math.pi * i / seg))) for i in range(seg)]
+
+        inc, out, apex = [], [], []         # per profile point: ring entered / left
+        for k, (y, r) in enumerate(profile):
+            if r <= 0.0:
+                apex.append(self.bm.verts.new((cx, y, cz)))
+                inc.append(None)
+                out.append(None)
+                continue
+            inc.append(ring(y, r))
+            out.append(ring(y, r) if k in breaks else inc[-1])
+        faces = []
+        for k in range(len(profile) - 1):
+            a, b = out[k], inc[k + 1]
+            if a is None or b is None:
+                continue
+            for i in range(seg):
+                j = (i + 1) % seg
+                faces.append(self._face((a[i], a[j], b[j], b[i]), pid, side))
+        body = [r for r in inc if r is not None]
+        for ring, rim, tip, nose in ((inc[0], body[0], apex[:1], True), (inc[-1], body[-1], apex[-1:], False)):
+            if ring is None:
+                for i in range(seg):
+                    faces.append(self._face((tip[0], rim[(i + 1) % seg], rim[i]), pid, side))
+            else:
+                faces.append(self._face(list(reversed(ring)) if nose else ring, cap_pid, self._group(0.0)))
+        # Split shells are open, so orient explicitly instead of recalc_face_normals:
+        # sides face away from the axis, end caps along it.
+        for f in faces:
+            f.normal_update()
+            c = f.calc_center_median()
+            out_dir = Vector((c.x - cx, 0.0, c.z - cz))
+            if out_dir.length < 1e-6:
+                out_dir = Vector((0.0, 1.0 if c.y > profile[len(profile) // 2][0] else -1.0, 0.0))
+            if f.normal.dot(out_dir) < 0:
+                f.normal_flip()
+
+    def plate(self, corners, part, double=True, joint=0):
+        """Flat polygon of zero thickness (grid-fin walls and bars). `double`
+        adds the reversed copy: the GE culls back faces, a thin wall must be
+        visible from both sides. Each face is shaded flat."""
+        pid = self.part_id(part, 0.0)
+        vs = [self.bm.verts.new(c) for c in corners]
+        self._face(vs, pid, self._group(0.0), joint)
+        if double:
+            vs = [self.bm.verts.new(c) for c in reversed(corners)]
+            self._face(vs, pid, self._group(0.0), joint)
+
     # ------------------------------------------------------------ pipeline
 
-    def finalize(self, name):
+    def finalize(self, name, rotate_method=None):
         """Cut, unwrap, mirror. Leaves self.half (unwrapped right half) and
-        self.full (mirrored, welded, triangulated)."""
+        self.full (mirrored, welded, triangulated).
+        rotate_method: pack_islands rotation ("AXIS_ALIGNED" for missiles:
+        long islands at arbitrary angles waste the atlas and alias lines)."""
         bm = self.bm
         bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], dist=1e-6,
                                plane_co=(0, 0, 0), plane_no=(-1, 0, 0), clear_outer=True)
@@ -322,7 +413,9 @@ class MeshBuilder:
         bpy.ops.mesh.select_all(action="SELECT")
         bpy.ops.uv.smart_project(angle_limit=math.radians(52), island_margin=0.0,
                                  area_weight=0.0, correct_aspect=True, scale_to_bounds=False)
-        bpy.ops.uv.pack_islands(rotate=True, margin=0.003, shape_method="CONCAVE")
+        extra = {"rotate_method": rotate_method} if rotate_method else {}
+        # ~1.5 texels between islands whatever the atlas size (0.003 at 512).
+        bpy.ops.uv.pack_islands(rotate=True, margin=max(0.003, 1.5 / TEX), shape_method="CONCAVE", **extra)
         bpy.ops.object.mode_set(mode="OBJECT")
 
         half = bmesh.new()
@@ -410,7 +503,69 @@ class MeshBuilder:
             fh.write(struct.pack(f"<{len(index)}H", *index))
             fh.write(b"\0" * ((-fh.tell()) % 16))
         self.part_table = parts
+        # Strips: the GE transforms every index it is sent (docs/decisions/0049).
+        import stripify
+        stripify.process(path)
         return len(index) // 3, len(verts), radius
+
+    def export_lod(self, name, path, target_tris, smooth_angle=55.0):
+        """Low-detail copy for distant aircraft (docs/decisions/0032): the full
+        mesh, all parts merged and static, collapse-decimated with X symmetry
+        (so both halves still share the mirrored atlas), normals rebuilt by
+        angle. One FSM4 part. Returns (triangles, object for previews)."""
+        base = bpy.data.meshes.new(name + "_src")  # no custom normals: they're rebuilt below
+        self.full.to_mesh(base)
+        obj = bpy.data.objects.new(name + "_src", base)
+        bpy.context.scene.collection.objects.link(obj)
+        # Two passes: planar dissolve that never crosses a UV island border
+        # (collapsing across one smears another part's texels over the wing),
+        # then a symmetric collapse of what's left down to the ratio.
+        flat = obj.modifiers.new("flat", "DECIMATE")
+        flat.decimate_type = "DISSOLVE"
+        flat.angle_limit = math.radians(LOD_PLANAR_DEG)
+        flat.delimit = {"UV", "SEAM", "SHARP"}
+        dg = bpy.context.evaluated_depsgraph_get()
+        planar = obj.evaluated_get(dg).data
+        planar.calc_loop_triangles()
+        after_planar = len(planar.loop_triangles)
+        mod = obj.modifiers.new("lod", "DECIMATE")
+        mod.decimate_type = "COLLAPSE"
+        mod.ratio = min(1.0, target_tris / max(after_planar, 1))
+        mod.use_collapse_triangulate = True
+        mod.use_symmetry = True
+        mod.symmetry_axis = "X"
+        dg.update()
+        me = bpy.data.meshes.new_from_object(obj.evaluated_get(dg))
+        me.set_sharp_from_angle(angle=math.radians(smooth_angle))
+        me.calc_loop_triangles()
+        uv = me.uv_layers.active.data
+        normals = me.corner_normals
+        verts, index, lookup = [], [], {}
+        radius = 0.0
+        for tri in me.loop_triangles:
+            for li in tri.loops:
+                c = me.vertices[me.loops[li].vertex_index].co
+                n = normals[li].vector
+                t = uv[li].uv
+                key = (round(c.x, 4), round(c.y, 4), round(c.z, 4),
+                       round(n.x, 3), round(n.y, 3), round(n.z, 3), round(t.x, 5), round(t.y, 5))
+                if key not in lookup:
+                    lookup[key] = len(verts)
+                    verts.append((t.x, 1.0 - t.y, n.x, n.z, -n.y, c.x, c.z, -c.y))
+                    radius = max(radius, c.length)
+                index.append(lookup[key])
+        with open(path, "wb") as fh:
+            fh.write(struct.pack("<4sIIfI12x", b"FSM4", len(verts), len(index), radius, 1))
+            fh.write(struct.pack("<IIHH4x3f4x3f4x", 0, len(index), CH_STATIC, 0, 0, 0, 0, 1, 0, 0))
+            for v in verts:
+                fh.write(struct.pack("<8f", *v))
+            fh.write(struct.pack(f"<{len(index)}H", *index))
+            fh.write(b"\0" * ((-fh.tell()) % 16))
+        lod = bpy.data.objects.new(name + "_mesh", me)
+        bpy.context.scene.collection.objects.link(lod)
+        bpy.data.objects.remove(obj)
+        lod.data.materials.clear()
+        return len(index) // 3, len(verts), lod
 
     def posed(self, angle):
         """Copy of the full mesh with joints deflected: angle(channel, side) in
@@ -505,8 +660,11 @@ class TexelMaps:
         return np.clip(0.5 - sdf_m / self.texel, 0.0, 1.0)
 
 
-def ambient_occlusion(mb, maps, rays=20, distance=2.2, step=2):
-    """Ray-traced AO against the full (mirrored) model, at 1/step resolution."""
+def ambient_occlusion(mb, maps, rays=20, distance=2.2, step=None):
+    """Ray-traced AO against the full (mirrored) model, at 1/step resolution
+    (step 2 at 512; full resolution for small atlases, where a half-res sample
+    would bleed between islands only a few texels wide)."""
+    step = step or max(1, TEX // 256)
     tree = BVHTree.FromBMesh(mb.full)
     golden = math.pi * (3 - math.sqrt(5))
     dirs = []
@@ -533,7 +691,18 @@ def ambient_occlusion(mb, maps, rays=20, distance=2.2, step=2):
                     occl += 1.0 - (dist / distance) ** 0.5 * 0.6
             ao[r, c] = 1.0 - occl / rays
     big = np.repeat(np.repeat(ao, step, 0), step, 1)
-    return _blur(big, 1)
+    return _blur(big, 1) if step > 1 else _blur_masked(big, maps.mask, 1)
+
+
+def _blur_masked(img, mask, radius):
+    """Like _blur, but only over texels of the atlas (no bleeding across islands)."""
+    out, m = img.copy(), mask.astype(np.float32)
+    for _ in range(radius):
+        pi, pm = np.pad(out * m, 1, mode="edge"), np.pad(m, 1, mode="edge")
+        acc = pi[:-2, 1:-1] + pi[2:, 1:-1] + pi[1:-1, :-2] + pi[1:-1, 2:] + 4 * pi[1:-1, 1:-1]
+        cnt = pm[:-2, 1:-1] + pm[2:, 1:-1] + pm[1:-1, :-2] + pm[1:-1, 2:] + 4 * pm[1:-1, 1:-1]
+        out = np.where(mask, acc / np.maximum(cnt, 1e-6), out)
+    return out
 
 
 def _blur(img, radius):

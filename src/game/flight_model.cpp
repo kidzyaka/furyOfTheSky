@@ -44,6 +44,11 @@ float FlightModel::trimAlpha(const Vec3& liftDir, float q, const Vec3& otherForc
     return alphaForLift(p_, needed / std::max(q, 1e-3f));
 }
 
+void FlightModel::setStores(float massRatio, float dragRatio) {
+    massInv_ = 1.0f / clamp(massRatio, 0.5f, 2.0f);
+    dragScale_ = clamp(dragRatio, 0.5f, 2.0f);
+}
+
 void FlightModel::reset(const Vec3& position, const Quat& orientation, float speed) {
     s_ = FlightState{};
     s_.position = position;
@@ -54,7 +59,8 @@ void FlightModel::reset(const Vec3& position, const Quat& orientation, float spe
     s_.mach = speed / p_.speedOfSound;
     // Trimmed start: nose raised by the AoA that holds 1 g along the path,
     // otherwise the first half second is spent sinking.
-    float alpha = clamp(trimAlpha(path.up(), p_.liftK * speed * speed, kGravityVec), p_.alphaMin, p_.alphaMax);
+    const float q = p_.liftK * massInv_ * speed * speed;
+    float alpha = clamp(trimAlpha(path.up(), q, kGravityVec), p_.alphaMin, p_.alphaMax);
     s_.orientation = (path * Quat::axisAngle(math::kRight, alpha)).normalized();
     s_.alpha = alpha;
 }
@@ -82,7 +88,9 @@ void FlightModel::step(const ControlInput& in, float dt) {
     s_.throttle += (target - s_.throttle) * approach(p_.throttleRate, dt);
     s_.afterburner = in.throttleUp && s_.throttle > 0.92f;
     s_.airbrake = in.throttleDown;
-    const float thrust = s_.afterburner ? p_.thrustAB : s_.throttle * p_.thrustMil;
+    // Engine force is fixed, so per unit mass it grows as the stores go.
+    const float thrustMass = s_.afterburner ? p_.thrustAB : s_.throttle * p_.thrustMil;
+    const float thrust = thrustMass * massInv_;
 
     // --- Air data: the relative wind seen from the body.
     const Quat toBody = s_.orientation.conjugate();
@@ -91,7 +99,7 @@ void FlightModel::step(const ControlInput& in, float dt) {
     s_.alpha = std::atan2(-vb.y, -vb.z);
     s_.beta = std::asin(clamp(vb.x, -1.0f, 1.0f));
     s_.mach = v / p_.speedOfSound;
-    const float q = p_.liftK * v * v;
+    const float q = p_.liftK * massInv_ * v * v;
 
     // --- Forces per unit mass, world frame.
     const Vec3 nose = s_.orientation.forward();
@@ -106,7 +114,7 @@ void FlightModel::step(const ControlInput& in, float dt) {
     // Broadside "plate" drag only once the flow separates; attached flow is
     // covered by the induced term.
     const float separated = math::smoothstep(0.35f, 0.8f, std::fabs(s_.alpha));
-    const float cd = p_.cd0 * (1.0f + (s_.airbrake ? p_.airbrakeDrag : 0.0f)) +
+    const float cd = p_.cd0 * dragScale_ * (1.0f + (s_.airbrake ? p_.airbrakeDrag : 0.0f)) +
                      p_.cdWave * waveDragFactor(s_.mach) + p_.cdInduced * cl * cl +
                      p_.cdPlate * (sa * sa * separated + 0.5f * sb * sb);
     // Sideslip pushes the path towards the nose, like lift does.
@@ -121,7 +129,7 @@ void FlightModel::step(const ControlInput& in, float dt) {
     const Vec3 pathRate = flowValid ? toBody.rotate(math::cross(vdir, aPerp) / v) : Vec3{};
 
     const float authority = clamp((v / p_.authoritySpeed) * (v / p_.authoritySpeed), 0.0f, 1.0f);
-    const float thrustFrac = clamp(thrust / p_.thrustMil, 0.0f, 1.3f);
+    const float thrustFrac = clamp(thrustMass / p_.thrustMil, 0.0f, 1.3f);
     Vec3 cmd;
     float response;
     if (s_.psm) {

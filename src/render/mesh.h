@@ -34,6 +34,7 @@ struct MeshPart {
     uint16_t channel, side;
     math::Vec3 pivot;       // model space, m
     math::Vec3 axis;        // unit hinge axis, model space
+    bool strip = false;     // the range is one GU_TRIANGLE_STRIP (else a list)
 };
 
 // Deflection per channel and side, radians: angle[channel][0 = right, 1 = left].

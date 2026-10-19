@@ -47,6 +47,26 @@ public:
     // nose to the trim AoA so the aircraft starts in steady 1 g flight.
     void reset(const math::Vec3& position, const math::Quat& orientation, float speed);
     void step(const ControlInput& in, float dt);
+    // Shot down: the airframe is gone (same end state as hitting the sea).
+    void destroy() { s_.crashed = true; }
+    // Swing the heading by `angle` rad about the world vertical (+ = left):
+    // the attitude and the flight path turn together, speed, bank and climb
+    // stay. The mission-area edge uses it to bring an aircraft back
+    // (docs/decisions/0043).
+    void turnHeading(float angle) {
+        if (angle == 0.0f || s_.crashed) return;
+        const math::Quat q = math::Quat::axisAngle(math::kUp, angle);
+        s_.orientation = (q * s_.orientation).normalized();
+        s_.pathDir = math::normalize(q.rotate(s_.pathDir));
+    }
+    // What hangs on the pylons, relative to the full missile load the
+    // parameters are tuned for (docs/decisions/0038): 1, 1 = that load, the
+    // model behaves exactly as without the call. `massRatio` = mass / full-load
+    // mass: thrust and aerodynamic forces are per unit mass, so a lighter
+    // aircraft accelerates, climbs and turns a little better. `dragRatio`
+    // scales the zero-lift drag coefficient. Call every step (it changes as
+    // missiles leave and are reloaded).
+    void setStores(float massRatio, float dragRatio);
 
     const FlightState& state() const { return s_; }
     const AircraftParams& params() const { return p_; }
@@ -56,6 +76,8 @@ private:
 
     const AircraftParams& p_;
     FlightState s_;
+    float massInv_ = 1.0f;   // 1 / mass ratio: every force except gravity is per unit mass
+    float dragScale_ = 1.0f;
 };
 
 }  // namespace game

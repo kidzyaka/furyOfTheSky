@@ -31,7 +31,7 @@ void ChaseCamera::reset(const FlightState& s) {
     orient_ = reference(s);
     distance_ = 20.0f;
     fov_ = 60.0f;
-    rumble_ = kick_ = crashLift_ = 0.0f;
+    rumble_ = kick_ = crashLift_ = vibrate_ = 0.0f;
     place(s);
 }
 
@@ -49,7 +49,8 @@ void ChaseCamera::update(const FlightState& s, float dt) {
     // Continuous rumble: heavy G, transonic buffet, post-stall flow breakdown.
     float target = 0.05f * math::smoothstep(6.0f, 11.0f, s.loadFactor) +
                    0.05f * math::smoothstep(0.9f, 0.97f, s.mach) * (1.0f - math::smoothstep(1.0f, 1.04f, s.mach)) +
-                   0.04f * math::smoothstep(0.5f, 0.9f, std::fabs(s.alpha));
+                   0.04f * math::smoothstep(0.5f, 0.9f, std::fabs(s.alpha)) + vibrate_;
+    vibrate_ = 0.0f;
     rumble_ += (target - rumble_) * approach(6.0f, dt);
     kick_ *= std::exp(-5.0f * dt);
     // After a crash, rise above the splash instead of sitting in the waves.
@@ -64,7 +65,7 @@ void ChaseCamera::place(const FlightState& s) {
 
     // Shake: incommensurate sines (no RNG, deterministic), low frequencies
     // only - fast jitter turns into smear on the PSP-3000 LCD.
-    float a = rumble_ + kick_;
+    float a = (rumble_ + kick_) * shake_;
     if (a > 1e-4f) {
         float t = time_;
         float sx = std::sin(t * 23.0f) * 0.6f + std::sin(t * 37.0f + 1.3f) * 0.4f;
@@ -74,7 +75,7 @@ void ChaseCamera::place(const FlightState& s) {
         pose_.target += offset * 0.4f;  // mostly rotational feel
     }
     pose_.eye.y = std::max(pose_.eye.y, kMinEyeAltitude) + crashLift_;
-    pose_.fovDeg = fov_ + 30.0f * kick_;
+    pose_.fovDeg = fov_ + 30.0f * kick_ * shake_;
 }
 
 }  // namespace game

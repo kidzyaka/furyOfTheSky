@@ -365,6 +365,156 @@ void testChaseCameraBehind() {
     CHECK(p.target.z < fm.state().position.z, "looks ahead");
 }
 
+
+// A scripted flight that touches everything the stores can reach: the
+// afterburner, a hard turn, the airbrake, PSM, a dive.
+void scriptedFlight(FlightModel& fm, bool callSetStores) {
+    for (int i = 0; i < int(30 / kDt); ++i) {
+        ControlInput in;
+        const float t = i * kDt;
+        in.throttleUp = t < 8.0f;
+        in.pitch = (t > 4.0f && t < 12.0f) ? 1.0f : (t > 20.0f ? -0.4f : 0.0f);
+        in.roll = (t > 6.0f && t < 10.0f) ? 1.0f : 0.0f;
+        in.throttleDown = t > 14.0f && t < 17.0f;
+        in.psm = t > 17.0f && t < 18.5f;
+        if (callSetStores) fm.setStores(1.0f, 1.0f);
+        fm.step(in, kDt);
+    }
+}
+
+bool sameBits(float a, float b) { return std::memcmp(&a, &b, sizeof a) == 0; }
+
+void testStoresFullLoadIsReference() {
+    std::printf("stores: a full load (1, 1) is the reference - the model behaves exactly as without the call\n");
+    FlightModel plain(kSu35S), full(kSu35S);
+    plain.reset({0, 3000, 0}, Quat{}, 220);
+    full.reset({0, 3000, 0}, Quat{}, 220);
+    scriptedFlight(plain, false);
+    scriptedFlight(full, true);
+    const auto& a = plain.state();
+    const auto& b = full.state();
+    CHECK(sameBits(a.position.x, b.position.x) && sameBits(a.position.y, b.position.y) &&
+              sameBits(a.position.z, b.position.z) && sameBits(a.speed, b.speed) &&
+              sameBits(a.orientation.w, b.orientation.w) && sameBits(a.alpha, b.alpha) &&
+              sameBits(a.loadFactor, b.loadFactor),
+          "diverged: speed %.6f vs %.6f, y %.4f vs %.4f", a.speed, b.speed, a.position.y, b.position.y);
+    std::printf("    after 30 s: %.0f km/h, %.0f m\n", a.speed * kKmh, a.position.y);
+}
+
+struct Run {
+    float tMach1 = -1.0f;   // s from 300 m/s to Mach 1 in the afterburner
+    float topKmh = 0.0f;    // level afterburner top speed
+    float cruiseKmh = 0.0f; // settled level cruise
+    float turnRate = 0.0f;  // deg/s, a full pull at 250 m/s, first 2 s
+    float speedLoss = 0.0f; // m/s lost in a 6 s full-stick turn
+};
+
+Run fly(float massRatio, float dragRatio) {
+    Run r;
+    {
+        auto fm = levelFlight(3000, 300);
+        fm.setStores(massRatio, dragRatio);
+        ControlInput in;
+        in.throttleUp = true;
+        for (int i = 0; i < int(90 / kDt); ++i) {
+            fm.step(in, kDt);
+            if (r.tMach1 < 0 && fm.state().mach >= 1.0f) r.tMach1 = i * kDt;
+        }
+        r.topKmh = fm.state().speed * kKmh;
+    }
+    {
+        auto fm = levelFlight(1500, 250);
+        fm.setStores(massRatio, dragRatio);
+        run(fm, {}, 60);
+        r.cruiseKmh = fm.state().speed * kKmh;
+    }
+    {
+        auto fm = levelFlight(3000, 250);
+        fm.setStores(massRatio, dragRatio);
+        ControlInput in;
+        in.pitch = 1.0f;
+        in.roll = 1.0f;
+        run(fm, in, 0.7f);  // roll to the bank first, then pull
+        in.roll = 0.0f;
+        const Vec3 d0 = fm.state().pathDir;
+        const float v0 = fm.state().speed;
+        run(fm, in, 2.0f);
+        const Vec3 d1 = fm.state().pathDir;
+        r.turnRate = math::degrees(std::acos(math::clamp(math::dot(d0, d1), -1.0f, 1.0f))) / 2.0f;
+        run(fm, in, 4.0f);
+        r.speedLoss = v0 - fm.state().speed;
+    }
+    return r;
+}
+
+void testCleanAircraftFliesBetter() {
+    std::printf("stores: a clean aircraft (lighter, less drag) accelerates, cruises and turns a little better\n");
+    // The numbers the game uses: 24 740 kg clean vs 26 210 kg with ten missiles
+    // (docs/decisions/0038), their drag area against 62 m^2 of wing.
+    const float mass = 24740.0f / 26210.0f;
+    const float drag = (kSu35S.cd0 - 0.1254f / 62.0f) / kSu35S.cd0;
+    const Run full = fly(1.0f, 1.0f);
+    const Run clean = fly(mass, drag);
+    std::printf("    Mach 1 from 300 m/s: %.1f s -> %.1f s;  top speed %.0f -> %.0f km/h;  cruise %.0f -> %.0f km/h\n",
+                full.tMach1, clean.tMach1, full.topKmh, clean.topKmh, full.cruiseKmh, clean.cruiseKmh);
+    std::printf("    pull at 250 m/s: %.1f -> %.1f deg/s, bleed in a 6 s turn %.0f -> %.0f m/s\n", full.turnRate,
+                clean.turnRate, full.speedLoss, clean.speedLoss);
+    CHECK(full.tMach1 > 0 && clean.tMach1 > 0, "Mach 1 not reached");
+    CHECK(clean.tMach1 < full.tMach1 * 0.97f, "acceleration through Mach 1: %.1f s vs %.1f s", clean.tMach1, full.tMach1);
+    CHECK(clean.topKmh > full.topKmh + 15.0f, "top speed %.0f vs %.0f km/h", clean.topKmh, full.topKmh);
+    CHECK(clean.cruiseKmh > full.cruiseKmh + 8.0f, "cruise %.0f vs %.0f km/h", clean.cruiseKmh, full.cruiseKmh);
+    CHECK(clean.speedLoss < full.speedLoss, "energy bled in the turn: %.0f vs %.0f", clean.speedLoss, full.speedLoss);
+    // (The pull-rate itself is the G-limiter's: a faster aircraft turns no quicker, so it is only printed.)
+    // ... but it is a modest gain, not a different aircraft.
+    CHECK(clean.topKmh < full.topKmh * 1.08f && clean.tMach1 > full.tMach1 * 0.7f, "gain too big");
+    // And a heavier-than-reference load is worse, the same law the other way.
+    const Run heavy = fly(1.05f, 1.1f);
+    CHECK(heavy.tMach1 > full.tMach1 && heavy.topKmh < full.topKmh, "heavy: %.1f s %.0f km/h", heavy.tMach1, heavy.topKmh);
+}
+
+void testStoresScalingIsClamped() {
+    std::printf("stores: absurd ratios are clamped, the model stays finite\n");
+    auto fm = levelFlight(3000, 250);
+    fm.setStores(0.0f, -3.0f);
+    run(fm, {}, 5);
+    CHECK(std::isfinite(fm.state().speed) && fm.state().speed > 100 && fm.state().speed < 700, "speed %.0f",
+          fm.state().speed);
+    fm.setStores(100.0f, 100.0f);
+    run(fm, {}, 5);
+    CHECK(std::isfinite(fm.state().speed), "speed %f", fm.state().speed);
+}
+
+void testCameraShakeOff() {
+    std::printf("camera: settings.cameraShake = false removes the rumble, impulses and the FOV kick\n");
+    auto fm = levelFlight(3000, 250);
+    game::ChaseCamera steady, rumbling, reference;
+    steady.reset(fm.state());
+    rumbling.reset(fm.state());
+    reference.reset(fm.state());
+    steady.setShake(0.0f);
+    float worstOff = 0.0f, worstOn = 0.0f, fovOff = 0.0f, fovOn = 0.0f;
+    for (int i = 0; i < int(2 / kDt); ++i) {
+        fm.step({}, kDt);
+        // The same impulses and cannon vibration into all three; only the
+        // reference gets none, as it would without them.
+        for (game::ChaseCamera* c : {&steady, &rumbling}) {
+            if (i % 30 == 0) c->impulse(0.5f);
+            c->vibrate(0.04f);
+        }
+        steady.update(fm.state(), kDt);
+        rumbling.update(fm.state(), kDt);
+        reference.update(fm.state(), kDt);
+        worstOff = std::max(worstOff, math::length(steady.pose().eye - reference.pose().eye));
+        worstOn = std::max(worstOn, math::length(rumbling.pose().eye - reference.pose().eye));
+        fovOff = std::max(fovOff, std::fabs(steady.pose().fovDeg - reference.pose().fovDeg));
+        fovOn = std::max(fovOn, std::fabs(rumbling.pose().fovDeg - reference.pose().fovDeg));
+    }
+    std::printf("    eye moved by shake: off %.5f m, on %.3f m; FOV kick: off %.4f deg, on %.2f deg\n", worstOff, worstOn,
+                fovOff, fovOn);
+    CHECK(worstOff < 1e-4f && fovOff < 1e-3f, "shake off still moved the camera: %.5f m %.4f deg", worstOff, fovOff);
+    CHECK(worstOn > 0.05f && fovOn > 3.0f, "shake on should move it (sanity): %.3f m %.2f deg", worstOn, fovOn);
+}
+
 }  // namespace
 
 int main() {
@@ -386,6 +536,10 @@ int main() {
     testSlowFlightWithTvc();
     testChaseCameraFollowsPathInCobra();
     testChaseCameraBehind();
+    testStoresFullLoadIsReference();
+    testCleanAircraftFliesBetter();
+    testStoresScalingIsClamped();
+    testCameraShakeOff();
     std::printf(g_failures ? "\n%d FAILED\n" : "\nALL PASSED\n", g_failures);
     return g_failures ? 1 : 0;
 }

@@ -12,6 +12,11 @@ struct ControlInput {
     bool throttleDown = false;  // hold: idle + airbrake
     bool psm = false;           // hold: FCS limiter off (post-stall manoeuvring / G override)
     bool flares = false;        // hold: release flare salvos
+    // Weapons (held states; the armament turns presses into single actions).
+    bool gun = false;
+    bool missile = false;
+    bool cycleWeapon = false;
+    bool cycleTarget = false;
 };
 
 }  // namespace game

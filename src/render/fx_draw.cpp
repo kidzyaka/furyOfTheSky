@@ -8,6 +8,7 @@
 
 #include "render/gu_context.h"
 #include "render/view.h"
+#include "world/sea.h"
 
 namespace gfx {
 
@@ -86,7 +87,7 @@ FxVertex* lathe(FxVertex* v, const Vec3& base, const Vec3& axis, const float (&z
     perpendiculars(axis, p1, p2);
     auto point = [&](int ring, int seg) {
         float a = seg * (2.0f * math::kPi / segments);
-        return base + axis * z[ring] + (p1 * std::cos(a) + p2 * std::sin(a)) * r[ring];
+        return base + axis * z[ring] + (p1 * world::fastCos(a) + p2 * world::fastSin(a)) * r[ring];
     };
     for (int ring = 0; ring + 1 < kRings; ++ring) {
         for (int seg = 0; seg < segments; ++seg) {
@@ -266,7 +267,7 @@ void drawTransonicVapor(const fx::AircraftEffects& fx, const Vec3& pos, const Qu
         const float size = (0.9f + 1.4f * t) * (0.9f + 0.2f * k);
         for (int i = 0; i < counts[ring]; ++i) {
             float a = (i + 0.5f * (ring & 1)) * (2.0f * math::kPi / counts[ring]);
-            float ca = std::cos(a), sa = std::sin(a);
+            float ca = world::fastCos(a), sa = world::fastSin(a);
             Vec3 rel = body(ca * r, 0.2f + sa * r * 0.8f, z);
             // Sunlit top, grey underside: the shading gives the cloud volume and
             // keeps it readable against the bright haze.
@@ -398,8 +399,8 @@ void drawFlares(const game::Countermeasures& cm, float time, const FxTextures& t
     for (int i = 0; i < game::Countermeasures::kMaxFlares; ++i) {
         const game::Flare& f = cm.flare(i);
         if (!f.lit()) continue;
-        float h = std::sin(time * 41.0f + i * 12.9f) * 43758.5f;
-        float flick = 0.8f + 0.4f * (h - std::floor(h));
+        float h = world::fastSin(time * 41.0f + i * 12.9f) * 43758.5f;
+        float flick = 0.8f + 0.4f * (h - static_cast<float>(static_cast<int>(h)) + (h < 0.0f ? 1.0f : 0.0f));
         float fade = 1.0f - smoothstep(3.3f, 4.0f, f.age);
         Vec3 rel = f.pos - eye;
         w = sprite(w, rel, 3.2f * fade, abgr(255, 196, 140, byte(0.3f * fade)));  // halo
@@ -432,10 +433,234 @@ void drawSpeedStreaks(const fx::AircraftEffects& fx, const Vec3& pathDir, float 
     end();
 }
 
-void drawShadow(const Vec3& pos, const Quat& rot, const Vec3& sun, const FxTextures& tex) {
+void drawWaterMarks(const fx::WaterMarks& marks, const Texture& foam, const FxTextures& tex) {
+    const int n = marks.count();
+    if (n == 0) return;
+    const Vec3& eye = camera().eye;
+    // Two batches (two textures); flat quads at 0.35 m.
+    for (int pass = 0; pass < 2; ++pass) {
+        const fx::MarkKind kind = pass == 0 ? fx::MarkKind::Foam : fx::MarkKind::Ring;
+        FxVertex* v = alloc(n * 6);
+        FxVertex* w = v;
+        for (int i = 0; i < n; ++i) {
+            const fx::WaterMark& m = marks[i];
+            if (m.kind != kind) continue;
+            const float t = m.t();
+            const float r = m.r0 + (m.r1 - m.r0) * std::sqrt(t);
+            const float fade = (1.0f - t) * (1.0f - t) * math::smoothstep(0.0f, 0.06f, t);
+            const unsigned a = byte(m.alpha * fade);
+            if (a < 3) continue;
+            const Vec3 c{m.x - eye.x, 0.35f - eye.y, m.z - eye.z};
+            const Vec3 along = Vec3{m.dirX, 0.0f, m.dirZ} * (r * m.stretch);
+            const Vec3 across = Vec3{-m.dirZ, 0.0f, m.dirX} * r;
+            w = quad(w, c, across, along, abgr(255, 255, 255, a));
+        }
+        if (w == v) continue;
+        begin(true, pass == 0 ? foam : *tex.ring);
+        sceGumDrawArray(GU_TRIANGLES, kFx3D, static_cast<int>(w - v), nullptr, v);
+        end();
+    }
+}
+
+void drawSurfRing(const Vec3& centre, int count, const float* radii, float width, float strength, float time,
+                  const Texture& foam) {
+    constexpr int kMaxSurfSegments = 384;
+    if (count < 3 || strength < 0.02f) return;
+    if (count > kMaxSurfSegments) count = kMaxSurfSegments;
+    const Vec3 c = centre - camera().eye;
+    const float crawl = time * 0.35f - std::floor(time * 0.35f);  // v scrolls: foam drifts outwards
+    float perimeter = 0.0f;
+    for (int k = 0; k < count; ++k) perimeter += radii[k];
+    perimeter *= 6.2831853f / count;
+    const float uRep = std::max(1.0f, std::round(perimeter / 40.0f));  // ~40 m per texture period
+    // Directions once for both bands, from the table (libm sin/cos is slow
+    // on the Allegrex, and a big island's coast has hundreds of points).
+    float dirX[kMaxSurfSegments + 1], dirZ[kMaxSurfSegments + 1];
+    for (int k = 0; k <= count; ++k) {
+        const float th = 6.2831853f * k / count;
+        dirX[k] = world::fastCos(th);
+        dirZ[k] = world::fastSin(th);
+    }
+    // Only the runs of coast in view: from low over the water a big island's
+    // ring is mostly behind the camera or off the sides, and the GE would
+    // transform every vertex of it (docs/decisions/0050). Adjacent visible
+    // runs are drawn as one strip.
+    constexpr int kRun = 16;
+    int runStart[kMaxSurfSegments / kRun + 1], runEnd[kMaxSurfSegments / kRun + 1];
+    int runs = 0, vertices = 0;
+    for (int k0 = 0; k0 < count; k0 += kRun) {
+        const int k1 = std::min(k0 + kRun, count);
+        float x0 = 1e9f, x1 = -1e9f, z0 = 1e9f, z1 = -1e9f;
+        for (int k = k0; k <= k1; ++k) {
+            const float r = radii[k % count];
+            x0 = std::min(x0, dirX[k] * r);
+            x1 = std::max(x1, dirX[k] * r);
+            z0 = std::min(z0, dirZ[k] * r);
+            z1 = std::max(z1, dirZ[k] * r);
+        }
+        const float hx = 0.5f * (x1 - x0), hz = 0.5f * (z1 - z0);
+        const Vec3 mid{centre.x + 0.5f * (x0 + x1), centre.y, centre.z + 0.5f * (z0 + z1)};
+        if (!sphereVisible(mid, std::sqrt(hx * hx + hz * hz) + width + 2.0f, 1e6f)) continue;
+        if (runs > 0 && runEnd[runs - 1] == k0) {
+            vertices += (k1 - k0) * 2;
+            runEnd[runs - 1] = k1;
+        } else {
+            vertices += (k1 - k0 + 1) * 2;
+            runStart[runs] = k0;
+            runEnd[runs++] = k1;
+        }
+    }
+    if (runs == 0) return;
+    // Two bands: the breaking white right at the rock, the spreading foam outside.
+    FxVertex* v = alloc(vertices * 2);
+    for (int band = 0; band < 2; ++band) {
+        FxVertex* w = v + band * vertices;
+        const float r0 = band == 0 ? -1.5f : 0.35f * width, r1 = band == 0 ? 0.4f * width : width;
+        const unsigned a0 = byte(strength * (band == 0 ? 0.95f : 0.6f)), a1 = byte(band == 0 ? strength * 0.6f : 0.0f);
+        for (int j = 0; j < runs; ++j)
+            for (int k = runStart[j]; k <= runEnd[j]; ++k) {
+                const int i = k % count;
+                const float cs = dirX[k], sn = dirZ[k];
+                const float ri = radii[i] + r0, ro = radii[i] + r1;
+                const float u = uRep * k / count;
+                *w++ = {u, crawl, abgr(255, 255, 255, a0), c.x + cs * ri, c.y + 0.3f, c.z + sn * ri};
+                *w++ = {u, crawl + 0.35f, abgr(255, 255, 255, a1), c.x + cs * ro, c.y + 0.3f, c.z + sn * ro};
+            }
+    }
+    begin(true, foam, true);
+    for (int band = 0; band < 2; ++band) {
+        const FxVertex* w = v + band * vertices;
+        for (int j = 0; j < runs; ++j) {
+            const int n = (runEnd[j] - runStart[j] + 1) * 2;
+            sceGumDrawArray(GU_TRIANGLE_STRIP, kFx3D, n, nullptr, w);
+            w += n;
+        }
+    }
+    end();
+}
+
+void drawPrecipitation(const fx::Precipitation& p, const Vec3& cameraVelocity, uint32_t tint, const FxTextures& tex) {
+    const int n = p.count();
+    if (n == 0) return;
+    const CameraBasis& cam = camera();
+    const bool snow = p.snow() > p.rain();
+    // A ~1/30 s exposure: at 250 m/s a raindrop near the camera is a 8 m streak.
+    constexpr float kExposure = 1.0f / 30.0f;
+    FxVertex* v = alloc(n * 6);
+    FxVertex* w = v;
+    const unsigned baseA = tint >> 24;
+    for (int i = 0; i < n; ++i) {
+        const Vec3 rel = p.drop(i) - cam.eye;
+        const float depth = math::dot(rel, cam.forward);
+        if (depth < 1.5f) continue;
+        const float d = math::length(rel);
+        // Fade in front of the camera and towards the edge of the cube.
+        const float fade = smoothstep(1.5f, 5.0f, depth) * smoothstep(fx::Precipitation::kHalf, 15.0f, d);
+        if (fade < 0.03f) continue;
+        Vec3 motion = (p.velocity(i) - cameraVelocity) * kExposure;
+        const float len = math::length(motion);
+        const float minLen = snow ? 0.06f : 0.35f;
+        if (len < minLen) motion = len > 1e-4f ? motion * (minLen / len) : Vec3{0.0f, -minLen, 0.0f};
+        // ~1.5 px flakes, ~1 px streaks at any range.
+        const float width = snow ? std::max(0.06f, d * 0.008f) : std::max(0.02f, d * 0.0055f);
+        const Vec3 side = math::normalize(math::cross(motion, rel)) * width;
+        const uint32_t c = (tint & 0x00FFFFFFu) | (byte(fade * baseA / 255.0f) << 24);
+        w = quad(w, rel, side, motion * 0.5f, c);
+    }
+    if (w == v) return;
+    begin(false, *tex.glow);
+    sceGumDrawArray(GU_TRIANGLES, kFx3D, static_cast<int>(w - v), nullptr, v);
+    end();
+}
+
+void drawMissileMotors(const game::Missile* missiles, int count, const FxTextures& tex) {
+    // A solid motor's exhaust is a white-hot core and an orange flame a few
+    // metres long. It is far brighter than the sky, so it stays visible as a
+    // point of light long after the missile itself is sub-pixel: sprites never
+    // shrink below ~1.5 px.
+    const CameraBasis& cam = camera();
+    const int kMax = count;
+    FxVertex* v = alloc(kMax * (4 + 6));
+    FxVertex* sprites = v;
+    FxVertex* w = v;
+    int burning = 0;
+    for (int i = 0; i < kMax; ++i) {
+        const game::Missile& m = missiles[i];
+        if (!m.live() || !m.burning()) continue;
+        const Vec3 fwd = m.orientation.forward();
+        const Vec3 tail = m.pos - fwd * (0.5f * m.type->length) - cam.eye;
+        const float d = math::length(tail);
+        const float px = d * 0.004f;  // ~1 px at this distance
+        const float flicker = 0.9f + 0.1f * std::sin(m.age * 53.0f + i);
+        w = sprite(w, tail - fwd * 0.6f, std::max(1.8f, 1.5f * px) * flicker, abgr(255, 170, 90, 150));
+        w = sprite(w, tail - fwd * 0.2f, std::max(0.5f, 1.2f * px), abgr(255, 250, 230, 255));
+        ++burning;
+    }
+    if (burning == 0) return;
+    FxVertex* flames = w;
+    for (int i = 0; i < kMax; ++i) {
+        const game::Missile& m = missiles[i];
+        if (!m.live() || !m.burning()) continue;
+        const Vec3 fwd = m.orientation.forward();
+        const Vec3 tail = m.pos - fwd * (0.5f * m.type->length) - cam.eye;
+        const float len = 2.8f * (0.9f + 0.1f * std::sin(m.age * 61.0f + i * 2.0f));
+        const Vec3 centre = tail - fwd * (0.5f * len);
+        Vec3 side = math::cross(fwd, centre);
+        side = math::normalize(side) * std::max(0.28f, math::length(centre) * 0.002f);
+        w = quad(w, centre, side, fwd * (-0.5f * len), abgr(255, 190, 110, 200));
+    }
+    begin(true, *tex.glow);
+    sceGumDrawArray(GU_SPRITES, kFx3D, static_cast<int>(flames - sprites), nullptr, sprites);
+    sceGumDrawArray(GU_TRIANGLES, kFx3D, static_cast<int>(w - flames), nullptr, flames);
+    end();
+}
+
+void drawTracers(const game::Gun& gun, const FxTextures& tex) {
+    // Every 30 mm round as a short glowing streak along its velocity (the
+    // eye's persistence over ~1/40 s). Kept ~1.5 px wide at any range.
+    const Vec3& eye = camera().eye;
+    const float life = gun.params().life;
+    FxVertex* v = alloc(game::Gun::kMaxShells * 6);
+    FxVertex* w = v;
+    for (int i = 0; i < game::Gun::kMaxShells; ++i) {
+        const game::Shell& s = gun.shell(i);
+        if (!s.live) continue;
+        const Vec3 rel = s.pos - eye;
+        const float d = math::length(rel);
+        const float speed = math::length(s.vel);
+        if (d < 4.0f || speed < 1.0f) continue;
+        const Vec3 dir = s.vel / speed;
+        const float len = std::min(speed * 0.025f, s.age * speed);  // not behind the muzzle
+        const Vec3 centre = rel - dir * (0.5f * len);
+        const Vec3 side = math::normalize(math::cross(dir, rel)) * std::max(0.12f, d * 0.003f);
+        const float fade = 1.0f - smoothstep(life - 0.6f, life, s.age);
+        w = quad(w, centre, side, dir * (0.5f * len), abgr(255, 196, 110, byte(0.9f * fade)));
+    }
+    if (w == v) return;
+    begin(true, *tex.glow);
+    sceGumDrawArray(GU_TRIANGLES, kFx3D, static_cast<int>(w - v), nullptr, v);
+    end();
+}
+
+void drawMuzzleFlash(const Vec3& muzzle, const Vec3& dir, float k, const FxTextures& tex) {
+    if (k < 0.05f) return;
+    const Vec3 rel = muzzle - camera().eye;
+    FxVertex* v = alloc(2 * 2 + 6);
+    FxVertex* w = sprite(v, rel + dir * 0.8f, 1.6f * k, abgr(255, 220, 150, byte(0.9f * k)));
+    w = sprite(w, rel + dir * 0.3f, 0.6f * k, abgr(255, 250, 230, 255));
+    FxVertex* q = w;
+    const Vec3 side = math::normalize(math::cross(dir, rel)) * (0.45f * k);
+    w = quad(w, rel + dir * 2.0f, side, dir * (1.8f * k), abgr(255, 200, 120, byte(0.7f * k)));
+    begin(true, *tex.glow);
+    sceGumDrawArray(GU_SPRITES, kFx3D, static_cast<int>(q - v), nullptr, v);
+    sceGumDrawArray(GU_TRIANGLES, kFx3D, static_cast<int>(w - q), nullptr, q);
+    end();
+}
+
+void drawShadow(const Vec3& pos, const Quat& rot, const Vec3& sun, const FxTextures& tex, float strength) {
     constexpr float kFadeAltitude = 160.0f;
-    if (pos.y > kFadeAltitude || sun.y < 0.1f) return;
-    float k = 1.0f - pos.y / kFadeAltitude;
+    if (pos.y > kFadeAltitude || sun.y < 0.1f || strength < 0.05f) return;
+    float k = (1.0f - pos.y / kFadeAltitude) * std::sqrt(strength);
     // Project the airframe along the sun direction onto the sea plane: the
     // shadow stretches and narrows with bank and pitch like the real one.
     auto onSea = [&](const Vec3& d) { return d - sun * (d.y / sun.y); };

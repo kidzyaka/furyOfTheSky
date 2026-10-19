@@ -43,7 +43,7 @@ bool Texture::load(const char* path) {
     return true;
 }
 
-void Texture::bind(bool repeat, bool alpha) const {
+void Texture::bind(bool repeat, bool alpha, bool trilinear) const {
     if (!clut_) {
         sceGuDisable(GU_TEXTURE_2D);
         return;
@@ -55,9 +55,30 @@ void Texture::bind(bool repeat, bool alpha) const {
     for (int i = 0; i < levelCount_; ++i)
         sceGuTexImage(i, width_ >> i, height_ >> i, width_ >> i, levels_[i]);
     sceGuTexFunc(GU_TFX_MODULATE, alpha ? GU_TCC_RGBA : GU_TCC_RGB);
-    sceGuTexFilter(GU_LINEAR_MIPMAP_LINEAR, GU_LINEAR);
+    sceGuTexFilter(trilinear ? GU_LINEAR_MIPMAP_LINEAR : GU_LINEAR_MIPMAP_NEAREST, GU_LINEAR);
     sceGuTexLevelMode(GU_TEXTURE_AUTO, 0.0f);
     sceGuTexWrap(repeat ? GU_REPEAT : GU_CLAMP, repeat ? GU_REPEAT : GU_CLAMP);
+    sceGuTexScale(1.0f, 1.0f);
+    sceGuTexOffset(0.0f, 0.0f);
+}
+
+}  // namespace gfx
+
+namespace gfx {
+
+void Texture::bindUi(bool linear, const uint32_t* clut) const {
+    if (!clut_) {
+        sceGuDisable(GU_TEXTURE_2D);
+        return;
+    }
+    sceGuEnable(GU_TEXTURE_2D);
+    sceGuClutMode(GU_PSM_8888, 0, 0xFF, 0);
+    sceGuClutLoad(256 / 8, clut ? clut : clut_);
+    sceGuTexMode(GU_PSM_T8, 0, 0, swizzled_ ? 1 : 0);
+    sceGuTexImage(0, width_, height_, width_, levels_[0]);
+    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+    sceGuTexFilter(linear ? GU_LINEAR : GU_NEAREST, linear ? GU_LINEAR : GU_NEAREST);
+    sceGuTexWrap(GU_CLAMP, GU_CLAMP);
     sceGuTexScale(1.0f, 1.0f);
     sceGuTexOffset(0.0f, 0.0f);
 }

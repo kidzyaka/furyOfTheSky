@@ -55,6 +55,11 @@ struct AircraftParams {
     float psmRollRate;      // rad/s
     float psmResponse;      // 1/s
     float recoveryRate;     // rad/s, FCS pitch authority bringing the nose back after PSM
+
+    // Stores (docs/decisions/0038). All numbers above are tuned with the full
+    // missile load hanging; lighter loads are scaled from this mass.
+    float cleanMass;        // kg, airframe + fuel without any missile
+    float wingArea;         // m^2, what the missiles' drag areas are divided by
 };
 
 // Su-35S: cruise ~920 km/h, MIL stays subsonic, the afterburner punches
@@ -99,6 +104,10 @@ constexpr AircraftParams kSu35S = {
     /*psmRollRate*/ 2.5f,
     /*psmResponse*/ 5.0f,
     /*recoveryRate*/ 1.3f,
+    // 25 300 kg normal takeoff mass is with 2 R-77 + 2 R-73E (ru.wikipedia, Su-35S):
+    // 25 300 - 2*175 - 2*105 = 24 740 kg without missiles.
+    /*cleanMass*/ 24740.0f,
+    /*wingArea*/ 62.0f,
 };
 
 }  // namespace game

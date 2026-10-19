@@ -23,6 +23,12 @@ Mixer g_mixer;
 
 Mixer& mixer() { return g_mixer; }
 
+float volumeGain(int step) {
+    if (step <= 0) return 0.0f;
+    const float x = std::min(step, 10) * 0.125f;  // 8 steps = unity
+    return x * x;
+}
+
 // --- Game side ----------------------------------------------------------------
 
 void Mixer::push(const Command& c) {
@@ -49,6 +55,11 @@ void Mixer::stop(int channel) {
 }
 
 void Mixer::setWorldGain(float gain) { push({kWorldGain, 0, false, nullptr, gain, 1.0f, 0.0f}); }
+
+void Mixer::setVolume(VolumeGroup group, float gain) {
+    if (group >= kVolumeGroupCount) return;
+    push({kVolume, static_cast<uint8_t>(group), false, nullptr, gain, 1.0f, 0.0f});
+}
 
 int Mixer::nextOneShot() {
     int ch = kOneShot0 + oneShot_;
@@ -83,23 +94,35 @@ void Mixer::apply(const Command& c) {
         case kWorldGain:
             worldGain_ = c.gain;
             break;
+        case kVolume:
+            volume_[c.channel] = std::max(c.gain, 0.0f);
+            break;
     }
 }
 
-void Mixer::mixVoice(Voice& v, bool world, float duck, int frames) {
+void Mixer::mixVoice(Voice& v, int channel, float duck, int frames) {
     const Sound& s = *v.sound;
-    const float g = v.gain * duck * (world ? worldGain_ : 1.0f);
+    // The pause duck holds the world still but not the menu clicks; the
+    // master volume depends on the group the channel belongs to.
+    const bool world = channel != kUi;
+    const float master = volume_[channel == kUi ? kVolumeUi : channel == kVoice ? kVolumeVoice : kVolumeSfx];
+    const float g = v.gain * duck * master * (world ? worldGain_ : 1.0f);
     const float pan = std::clamp(v.pan, -1.0f, 1.0f);
     const int32_t tl = toQ14(g * std::min(1.0f, 1.0f - pan));
     const int32_t tr = toQ14(g * std::min(1.0f, 1.0f + pan));
     const float pitch = std::clamp(v.pitch, 0.05f, 4.0f);
     v.step = static_cast<uint32_t>(static_cast<float>(s.rate) * pitch * (1 << kFrac) / kOutputRate);
 
-    // A stopped voice that has faded out is done.
-    if (tl == 0 && tr == 0 && v.left == 0 && v.right == 0 && (!v.loop || v.gain <= 0.0f)) {
-        if (v.gain <= 0.0f && !v.loop) v.sound = nullptr;
+    // A stopped voice that has faded out is done. One held silent by the pause
+    // (or a loop turned down to nothing) stands still - but not by a master
+    // volume of 0: those sounds play out unheard instead of waiting for it to
+    // be raised and then blurting out stale.
+    const bool faded = v.left == 0 && v.right == 0;
+    if (faded && v.gain <= 0.0f && !v.loop) {
+        v.sound = nullptr;
         return;
     }
+    if (faded && tl == 0 && tr == 0 && master > 0.0f && (!v.loop || v.gain <= 0.0f)) return;
 
     const int16_t* d = s.samples;
     const uint32_t n = s.frames;
@@ -152,9 +175,10 @@ void Mixer::mix(int16_t* out, int frames) {
     std::fill(acc_, acc_ + frames * 2, 0);
     // While the informer speaks, the continuous loops step back ~5 dB (a
     // headset voice sits on top of the engine in a real cockpit too).
-    const float duck = voices_[kVoice].sound ? kDuck : 1.0f;
+    // (A voice turned down to nothing does not duck them either.)
+    const float duck = voices_[kVoice].sound && volume_[kVolumeVoice] > 0.0f ? kDuck : 1.0f;
     for (int c = 0; c < kChannelCount; ++c)
-        if (voices_[c].sound) mixVoice(voices_[c], c != kUi, c < kOneShot0 ? duck : 1.0f, frames);
+        if (voices_[c].sound) mixVoice(voices_[c], c, c < kOneShot0 ? duck : 1.0f, frames);
 
     // Peak limiter: instant attack (per block), ~0.4 s release. Keeps an
     // explosion over the afterburner from hard-clipping into a buzz.

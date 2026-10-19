@@ -1,5 +1,5 @@
 """Effect textures: glow, smoke, afterburner flame, ring, glint,
-aircraft shadow, HUD stroke and trail profiles, ocean wave highlights (numpy only).
+aircraft shadow, HUD stroke and trail profiles (numpy only). The sea's textures are in env.py.
 
 Usage (from the project root):  python3 tools/textures/fx.py
 Writes assets/textures/fx_*.ftx and previews to build/previews/fx_*.png.
@@ -183,19 +183,10 @@ def ribbon():
     write_alpha("ribbon", np.clip(smoothstep(1.0, 0.2, np.abs(x)), 0, 1), levels=1)
 
 
-def waves():
-    """Moving wave highlights for the second ocean pass (additive)."""
-    size = 128
-    n = periodic_fbm(size, 8, 4, seed=41)
-    m = periodic_fbm(size, 16, 3, seed=43)
-    crest = smoothstep(0.62, 0.80, n * 0.7 + m * 0.4)
-    write_alpha("waves", np.clip(crest * 0.9, 0, 1), color=(0.85, 0.92, 1.0))
-
-
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(PREVIEW, exist_ok=True)
-    for make in (glow, smoke, flame, ring, glint, shadow, line, ribbon, waves):
+    for make in (glow, smoke, flame, ring, glint, shadow, line, ribbon):
         make()
-    for name in ("glow", "smoke", "flame", "ring", "glint", "shadow", "line", "ribbon", "waves"):
+    for name in ("glow", "smoke", "flame", "ring", "glint", "shadow", "line", "ribbon"):
         print(f"[fx] fx_{name}.ftx {os.path.getsize(os.path.join(OUT, f'fx_{name}.ftx'))} bytes")

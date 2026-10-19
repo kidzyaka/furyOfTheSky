@@ -3,54 +3,57 @@
 #include <cstdint>
 
 #include "math/vec3.h"
+#include "render/grid_mesh.h"
 #include "render/texture.h"
+#include "world/environment.h"
+#include "world/grid_lod.h"
+#include "world/sea.h"
 
 namespace gfx {
 
-// Infinite sea (docs/decisions/0011, 0019): two grids that travel with the
-// camera in whole texture periods (so the tiled texture never swims), faded
-// into the haze by fog, with moving wave highlights and sun glitter on top.
-//  - fine patch: 20 x 20 tiles of 16 m right under the camera. The GE does not
-//    clip triangles against the near plane, it drops them; small tiles keep
-//    the dropped ones out of view when flying low (docs/psp/gotchas.md #19);
-//  - coarse ring: 31 x 31 tiles of 320 m with the centre tile missing - the
-//    fine patch fills it exactly. Spans +-4.96 km.
+// The sea (docs/decisions/0040, replacing the two grids of 0011/0019).
+//  - Geometry: LOD rings around the camera (world/grid_lod.h) - a 4 m grid
+//    under the camera, every ring twice as coarse, as many as the haze needs.
+//    No tile is bigger than a third of its distance, so no triangle the GE
+//    drops for crossing the near plane or the guard band is ever on screen
+//    (the holes of gotchas #19, proven on the host: tests/world_test.cpp).
+//  - Light: every vertex is shaded on the CPU each frame (world::SeaShader):
+//    body colour, Fresnel sky reflection, the sun's broad reflection, wind
+//    patches. Near the camera the swell lifts and tilts the vertices.
+//  - Pass 1: a ripple texture modulates it, sliding downwind.
+//  - Pass 2 (inner rings, only when crests break): additive whitecaps on the
+//    crests, lit warm in the sun's path, another texture sliding across the wind.
 class Ocean {
 public:
-    static constexpr float kTexRepeat = 64.0f;  // m covered by one texture tile
-    static constexpr int kFine = 20;
-    static constexpr float kFineSize = 16.0f;
-    static constexpr int kCoarse = 31;          // odd: one centre tile
-    static constexpr float kCoarseSize = kFine * kFineSize;  // 320 m
+    static constexpr float kTile0 = 4.0f;          // m, the finest ring's tile
+    static constexpr float kDetailRepeat = 24.0f;   // m per period of the ripple texture
+    static constexpr float kFoamRepeat = 56.0f;     // m per period of the foam texture
+    static constexpr int kFoamRings = 5;            // pass 2 on the inner rings (out to ~0.8 km)
+    static constexpr float kDetailMean = 0.80f;     // mean of the ripple texture (assets: tools/textures/env.py)
 
     void init();
-    // Base sea, then a scrolling additive layer of wave highlights near the
-    // camera (fades out with distance: fog colour black for the additive pass).
-    void draw(const math::Vec3& eye, const Texture& texture, const Texture& waves, float time) const;
-    // Sun glitter: an additive billboard at the sun's mirror direction,
-    // stretched towards the viewer like the real sun path on water.
-    void drawGlint(const math::Vec3& dirToSun, const Texture& glint, float time) const;
+    // Sea state, colours and how far the rings reach for this sortie.
+    void setup(const world::Environment& env);
+    // `sunLight`: 0..1 direct sun at the camera (the deck takes it away).
+    void draw(const math::Vec3& eye, const Texture& detail, const Texture& foam, float time, float sunLight);
+    // Sun glitter: an additive quad lying on the water along the sun's
+    // azimuth, from where the steepest facets catch it to the horizon.
+    void drawGlint(const math::Vec3& eye, const Texture& glint, float time, float sunLight) const;
+    // Surface height near the camera (spray, splashes sit on it).
+    float height(float x, float z, float time) const { return swell_.height(x, z, time); }
 
 private:
-    static constexpr int kFineVerts = (kFine + 1) * (kFine + 1);
-    static constexpr int kFineIndices = kFine * kFine * 6;
-    static constexpr int kCoarseVerts = (kCoarse + 1) * (kCoarse + 1);
-    static constexpr int kCoarseIndices = (kCoarse * kCoarse - 1) * 6;
-    static constexpr int kWaveRings = 3;  // coarse rings around the patch that get wave highlights
-
     struct Vertex {
         float u, v;
+        uint32_t color;
         float x, y, z;
     };
-
-    static void fillGrid(Vertex* v, int n, float tile);
-    void drawGrids(const math::Vec3& eye, bool wavesOnly) const;
-
-    alignas(16) Vertex fine_[kFineVerts];
-    alignas(16) uint16_t fineIndices_[kFineIndices];
-    alignas(16) Vertex coarse_[kCoarseVerts];
-    alignas(16) uint16_t coarseIndices_[kCoarseIndices];  // sorted by ring, innermost first
-    int innerCoarseIndices_ = 0;
+    GridMesh grid_;
+    world::Swell swell_;
+    world::SeaShader shader_;
+    world::Environment env_;
+    int levels_ = 9;
+    math::Vec3 windDir_{0.0f, 0.0f, -1.0f};
 };
 
 }  // namespace gfx

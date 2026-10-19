@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+
 #include "game/flight_model.h"
 
 namespace game {
@@ -23,6 +25,12 @@ public:
     void update(const FlightState& s, float dt);
     // Short kick (afterburner light-up). Amplitude in metres.
     void impulse(float amplitude);
+    // Extra continuous shake for the next update (cannon recoil), metres.
+    void vibrate(float amplitude) { vibrate_ = std::max(vibrate_, amplitude); }
+    // Accessibility / taste (settings.cameraShake): scales every shake - the
+    // rumble, impulses, the cannon - and the field-of-view kick that rides
+    // on impulses. 0 = a rock-steady camera. Survives reset().
+    void setShake(float scale) { shake_ = std::max(scale, 0.0f); }
     const CameraPose& pose() const { return pose_; }
 
 private:
@@ -34,6 +42,8 @@ private:
     float fov_ = 60.0f;
     float rumble_ = 0.0f;  // continuous shake, m
     float kick_ = 0.0f;    // decaying impulse, m
+    float vibrate_ = 0.0f; // requested for this step, m
+    float shake_ = 1.0f;   // overall scale of the above
     float time_ = 0.0f;
     float crashLift_ = 0.0f;  // m the camera has risen since a crash
     CameraPose pose_;

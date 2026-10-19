@@ -3,6 +3,7 @@
 #include <pspgu.h>
 #include <pspgum.h>
 
+#include <algorithm>
 #include <cmath>
 
 #include "render/gu_context.h"
@@ -32,6 +33,16 @@ bool projectDirection(const math::Vec3& dir, float& sx, float& sy) {
     sx = kScreenW * 0.5f * (1.0f + math::dot(dir, g_camera.right) / (zs * g_camera.tanHalfX));
     sy = kScreenH * 0.5f * (1.0f - math::dot(dir, g_camera.up) / (zs * g_camera.tanHalfY));
     return z > 1e-4f;
+}
+
+bool sphereVisible(const math::Vec3& centre, float radius, float maxDistance) {
+    const math::Vec3 rel = centre - g_origin;
+    const float z = math::dot(rel, g_camera.forward);
+    if (z < -radius || z > maxDistance + radius) return false;
+    const float zc = std::max(z, 1e-3f);
+    // Half-extent of the view at depth z, padded by the radius (slant-safe).
+    const float x = std::fabs(math::dot(rel, g_camera.right)), y = std::fabs(math::dot(rel, g_camera.up));
+    return x <= zc * g_camera.tanHalfX + radius * 1.5f && y <= zc * g_camera.tanHalfY + radius * 1.5f;
 }
 
 bool projectPoint(const math::Vec3& world, float& sx, float& sy) {
@@ -68,11 +79,28 @@ void setModelTranslation(const math::Vec3& worldPos) {
     sceGumTranslate(&v);
 }
 
+void setModelTranslationScale(const math::Vec3& worldPos, float sx, float sy, float sz) {
+    const math::Vec3 p = worldPos - g_origin;
+    ScePspFMatrix4 m = {{sx, 0.0f, 0.0f, 0.0f}, {0.0f, sy, 0.0f, 0.0f}, {0.0f, 0.0f, sz, 0.0f}, {p.x, p.y, p.z, 1.0f}};
+    sceGumMatrixMode(GU_MODEL);
+    sceGumLoadMatrix(&m);
+}
+
 void setModel(const math::Vec3& worldPos, const math::Quat& rot) {
     // pspgum matrices are column-major: x/y/z/w are the images of the basis
     // vectors and the translation (see gumTranslate writing into .w).
     math::Vec3 pos = worldPos - g_origin;
     math::Vec3 r = rot.rotate(math::kRight), u = rot.rotate(math::kUp), b = rot.rotate({0, 0, 1});
+    ScePspFMatrix4 m = {{r.x, r.y, r.z, 0.0f}, {u.x, u.y, u.z, 0.0f}, {b.x, b.y, b.z, 0.0f},
+                        {pos.x, pos.y, pos.z, 1.0f}};
+    sceGumMatrixMode(GU_MODEL);
+    sceGumLoadMatrix(&m);
+}
+
+void setModel(const math::Vec3& worldPos, const math::Quat& rot, const math::Vec3& scale) {
+    const math::Vec3 pos = worldPos - g_origin;
+    const math::Vec3 r = rot.rotate(math::kRight) * scale.x, u = rot.rotate(math::kUp) * scale.y,
+                     b = rot.rotate({0, 0, 1}) * scale.z;
     ScePspFMatrix4 m = {{r.x, r.y, r.z, 0.0f}, {u.x, u.y, u.z, 0.0f}, {b.x, b.y, b.z, 0.0f},
                         {pos.x, pos.y, pos.z, 1.0f}};
     sceGumMatrixMode(GU_MODEL);
@@ -120,6 +148,48 @@ void setPointLight(const math::Vec3& worldPos, uint32_t color, float strength) {
     sceGuEnable(GU_LIGHT3);
 }
 
+void enableDistantLight(const math::Vec3& dirToSun, uint32_t key, uint32_t ambient) {
+    ScePspFVector3 sun = {dirToSun.x, dirToSun.y, dirToSun.z};
+    sceGuEnable(GU_LIGHTING);
+    sceGuEnable(GU_LIGHT0);
+    sceGuDisable(GU_LIGHT1);
+    sceGuDisable(GU_LIGHT2);
+    sceGuDisable(GU_LIGHT3);
+    sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE, &sun);
+    sceGuLightColor(0, GU_DIFFUSE, key);
+    sceGuLightMode(GU_SINGLE_COLOR);
+    // The sky and sea fill folded into a brighter ambient.
+    sceGuAmbient(ambient);
+    sceGuColor(0xFFFFFFFF);
+}
+
+void enableLightRig(const LightRig& rig) {
+    ScePspFVector3 key = {rig.keyDir.x, rig.keyDir.y, rig.keyDir.z};
+    ScePspFVector3 fill = {rig.fillDir.x, rig.fillDir.y, rig.fillDir.z};
+    ScePspFVector3 bounce = {rig.bounceDir.x, rig.bounceDir.y, rig.bounceDir.z};
+    sceGuEnable(GU_LIGHTING);
+    sceGuEnable(GU_LIGHT0);
+    sceGuEnable(GU_LIGHT1);
+    sceGuEnable(GU_LIGHT2);
+    sceGuDisable(GU_LIGHT3);
+    sceGuLight(0, GU_DIRECTIONAL, GU_DIFFUSE_AND_SPECULAR, &key);
+    sceGuLightColor(0, GU_DIFFUSE, rig.key);
+    sceGuLightColor(0, GU_SPECULAR, rig.keySpecular);
+    sceGuLight(1, GU_DIRECTIONAL, GU_DIFFUSE, &fill);
+    sceGuLightColor(1, GU_DIFFUSE, rig.fill);
+    // The GE lights every vertex per enabled light: a black bounce costs as much as a real one.
+    if (rig.bounce & 0x00FFFFFFu) {
+        sceGuLight(2, GU_DIRECTIONAL, GU_DIFFUSE, &bounce);
+        sceGuLightColor(2, GU_DIFFUSE, rig.bounce);
+    } else {
+        sceGuDisable(GU_LIGHT2);
+    }
+    sceGuLightMode(GU_SEPARATE_SPECULAR_COLOR);
+    sceGuSpecular(12.0f);
+    sceGuAmbient(rig.ambient);
+    sceGuColor(0xFFFFFFFF);
+}
+
 void disableLighting() {
     sceGuDisable(GU_LIGHTING);
     sceGuColor(0xFFFFFFFF);
@@ -131,6 +201,12 @@ void enableFog(float nearZ, float farZ, uint32_t color) {
     g_fogColor = color;
     sceGuFog(nearZ, farZ, color);
     sceGuEnable(GU_FOG);
+}
+
+void currentFog(float& nearZ, float& farZ, uint32_t& color) {
+    nearZ = g_fogNear;
+    farZ = g_fogFar;
+    color = g_fogColor;
 }
 
 void setAdditiveFog(bool additive) { sceGuFog(g_fogNear, g_fogFar, additive ? 0u : g_fogColor); }

@@ -6,7 +6,10 @@
 #include <cstring>
 
 #include "math/vec3.h"
+#include "render/draw2d.h"
+#include "render/font.h"
 #include "render/gu_context.h"
+#include "world/sea.h"
 
 namespace gfx {
 namespace {
@@ -74,6 +77,26 @@ constexpr float kAdvance = 11.5f;
 
 }  // namespace
 
+void HudCanvas::label(float x, float y, const char* s, int face, uint32_t color, Align align, bool outline) {
+    if (labels_ >= kMaxLabels) return;
+    Label& l = label_[labels_++];
+    l.x = static_cast<int16_t>(std::lround(x));
+    l.y = static_cast<int16_t>(std::lround(y));
+    l.face = static_cast<uint8_t>(face);
+    l.align = static_cast<uint8_t>(align);
+    l.outline = outline;
+    l.color = color;
+    std::strncpy(l.text, s, sizeof l.text - 1);
+    l.text[sizeof l.text - 1] = '\0';
+}
+
+void HudCanvas::sprite(int u, int v, int w, int h, float x, float y, uint32_t tint) {
+    if (sprites_ >= kMaxSprites) return;
+    sprite_[sprites_++] = {static_cast<int16_t>(u), static_cast<int16_t>(v), static_cast<int16_t>(w),
+                           static_cast<int16_t>(h), static_cast<int16_t>(std::lround(x)),
+                           static_cast<int16_t>(std::lround(y)), tint};
+}
+
 HudCanvas& hudCanvas() {
     static HudCanvas canvas;
     return canvas;
@@ -107,11 +130,19 @@ void HudCanvas::circle(float cx, float cy, float r, int segments) {
     float px = cx + r, py = cy;
     for (int i = 1; i <= segments; ++i) {
         float a = i * (2.0f * math::kPi / segments);
-        float x = cx + r * std::cos(a), y = cy + r * std::sin(a);
+        float x = cx + r * world::fastCos(a), y = cy + r * world::fastSin(a);
         line(px, py, x, y);
         px = x;
         py = y;
     }
+}
+
+void HudCanvas::panel(float x0, float y0, float x1, float y1, uint32_t abgr) {
+    if (panels_ < kMaxPanels) panel_[panels_++] = {x0, y0, x1, y1, abgr};
+}
+
+void HudCanvas::disc(float cx, float cy, float r, uint32_t abgr) {
+    if (panels_ < kMaxPanels) panel_[panels_++] = {cx, cy, r, -1.0f, abgr};
 }
 
 float HudCanvas::textWidth(const char* s, float height) {
@@ -163,7 +194,53 @@ void HudCanvas::textRotated(float x, float y, const char* s, float height, float
     }
 }
 
-void HudCanvas::flush(const Texture& strokeTexture) {
+void HudCanvas::flush(const Texture& strokeTexture, const Font* font, const Texture* plates) {
+    flushVector(strokeTexture);
+    flushOverlay(font, plates);
+}
+
+void HudCanvas::flushVector(const Texture& strokeTexture) {
+    if (panels_ > 0) {
+        // Untextured, alpha-blended: rects as 2 triangles, discs as 20-segment fans.
+        struct PV {
+            uint32_t color;
+            float x, y, z;
+        };
+        constexpr int kSeg = 20;
+        int count = 0;
+        for (int i = 0; i < panels_; ++i) count += panel_[i].y1 >= 0.0f ? 6 : kSeg * 3;
+        auto* v = static_cast<PV*>(sceGuGetMemory(count * sizeof(PV)));
+        PV* w = v;
+        for (int i = 0; i < panels_; ++i) {
+            const Panel& p = panel_[i];
+            if (p.y1 >= 0.0f) {
+                const PV a = {p.color, p.x0, p.y0, 0.0f}, b = {p.color, p.x1, p.y0, 0.0f};
+                const PV c = {p.color, p.x1, p.y1, 0.0f}, d = {p.color, p.x0, p.y1, 0.0f};
+                *w++ = a; *w++ = b; *w++ = c;
+                *w++ = a; *w++ = c; *w++ = d;
+            } else {
+                for (int k = 0; k < kSeg; ++k) {
+                    const float a0 = k * (2.0f * math::kPi / kSeg), a1 = (k + 1) * (2.0f * math::kPi / kSeg);
+                    *w++ = {p.color, p.x0, p.y0, 0.0f};
+                    *w++ = {p.color, p.x0 + p.x1 * world::fastCos(a0), p.y0 + p.x1 * world::fastSin(a0), 0.0f};
+                    *w++ = {p.color, p.x0 + p.x1 * world::fastCos(a1), p.y0 + p.x1 * world::fastSin(a1), 0.0f};
+                }
+            }
+        }
+        sceGuDisable(GU_DEPTH_TEST);
+        sceGuDisable(GU_FOG);
+        sceGuDisable(GU_CULL_FACE);
+        sceGuDisable(GU_LIGHTING);
+        sceGuDisable(GU_TEXTURE_2D);
+        sceGuEnable(GU_BLEND);
+        sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+        sceGuDrawArray(GU_TRIANGLES, GU_COLOR_8888 | GU_VERTEX_32BITF | GU_TRANSFORM_2D, static_cast<int>(w - v),
+                       nullptr, v);
+        sceGuDisable(GU_BLEND);
+        sceGuEnable(GU_CULL_FACE);
+        sceGuEnable(GU_DEPTH_TEST);
+        panels_ = 0;
+    }
     if (n_ == 0) return;
     struct V {
         float u, v;
@@ -215,6 +292,27 @@ void HudCanvas::flush(const Texture& strokeTexture) {
     sceGuEnable(GU_CULL_FACE);
     sceGuEnable(GU_DEPTH_TEST);
     n_ = 0;
+}
+
+void HudCanvas::flushOverlay(const Font* font, const Texture* plates) {
+    if ((sprites_ == 0 || !plates) && (labels_ == 0 || !font)) {
+        labels_ = sprites_ = 0;
+        return;
+    }
+    begin2D();
+    if (plates)
+        for (int i = 0; i < sprites_; ++i) {
+            const Sprite& s = sprite_[i];
+            gfx::sprite(*plates, s.u, s.v, s.w, s.h, s.x, s.y, s.w, s.h, s.tint);
+        }
+    if (font)
+        for (int i = 0; i < labels_; ++i) {
+            const Label& l = label_[i];
+            const TextAlign a = l.align == kCenter ? kAlignCenter : (l.align == kRight ? kAlignRight : kAlignLeft);
+            font->draw(l.face, l.x, l.y, l.text, l.color, a, l.outline ? TextStyle::Shadow : TextStyle::Plain);
+        }
+    end2D();
+    labels_ = sprites_ = 0;
 }
 
 }  // namespace gfx

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fx/particles.h"
+#include "fx/water_marks.h"
 #include "game/countermeasures.h"
 #include "game/flight_model.h"
 
@@ -66,6 +67,13 @@ public:
     const Trail& wingtipTrail(int side) const { return tips_[side]; }
     const Trail& contrail(int side) const { return contrails_[side]; }
     const Trail& flareTrail(int i) const { return flareTrails_[i]; }
+    const WaterMarks& waterMarks() const { return marks_; }
+    // Something blasting the sea from above at `centre` (on the water): a jet
+    // or a rotor (docs/decisions/0044). `radius` m of the blast where it meets
+    // the water, `strength` 0..1. Throws a ring of spray and mist outwards,
+    // spreads rings over the water and leaves white water. Called every step
+    // while it lasts (the exhaust near the sea here; a helicopter's rotor later).
+    void downwash(const math::Vec3& centre, float radius, float strength, float dt);
     const math::Vec3& streak(int i) const { return streaks_[i]; }
     float streakAlpha() const { return streakAlpha_; }
 
@@ -84,6 +92,8 @@ private:
     bool machOne_ = false;
     bool wasCrashed_ = false;
     float sprayAcc_ = 0.0f;
+    float washAcc_ = 0.0f, washMark_ = 0.0f, wakeMark_ = 0.0f;
+    WaterMarks marks_;
     float time_ = 0.0f;
     ParticleSystem particles_;
     Trail tips_[2], contrails_[2];

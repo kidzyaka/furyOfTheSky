@@ -13,7 +13,18 @@ public:
 
     // Uploads the CLUT and binds all mip levels with trilinear filtering.
     // repeat: tile the texture (ocean); alpha: take alpha from the CLUT.
-    void bind(bool repeat = false, bool alpha = false) const;
+    // trilinear = false: the nearest mip level, bilinear in it - half the
+    // texel reads, for big tiling surfaces (terrain) where the level steps
+    // don't show.
+    void bind(bool repeat = false, bool alpha = false, bool trilinear = true) const;
+    // 2D menus (docs/decisions/0035): level 0 only, clamp, alpha from the
+    // CLUT; nearest filtering for 1:1 pixel art and text, linear for scaled
+    // images. `clut` replaces the file's palette (font styles).
+    void bindUi(bool linear, const uint32_t* clut = nullptr) const;
+
+    bool loaded() const { return clut_ != nullptr; }
+    int width() const { return width_; }
+    int height() const { return height_; }
 
 private:
     core::Blob blob_;

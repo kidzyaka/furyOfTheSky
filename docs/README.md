@@ -7,6 +7,14 @@
 - [workflow.md](workflow.md) — установка, сборка, деплой на PSP, smoke-тест, сборка моделей
 - [roadmap.md](roadmap.md) — этапы разработки
 - [devlog.md](devlog.md) — журнал по сессиям: что сделано, что сломалось и почему
+- [story/world.md](story/world.md) — сюжет: ИИ PAX начал войну, чтобы её предотвратить; совет HELIOS позволил; персонажи
+- [story/storytelling.md](story/storytelling.md) — как миссии рассказывают сюжет: каналы, журнал PAX, подготовки и отклики, все 35 записей
+- [story/player.md](story/player.md) — сюжет глазами игрока: архив записей, обрыв записи, улики, нелинейность
+- [story/campaign.md](story/campaign.md) — 35 записей по актам, хронометраж, карты, техника, порядок производства
+- [story/cutscenes.md](story/cutscenes.md) — катсцены: графический роман, техника, список К00–К40
+- [story/scenes.md](story/scenes.md) — диалоги ключевых сцен и журнал PAX
+- [story/ending.md](story/ending.md) — финал по сценам
+- [story/trilogy.md](story/trilogy.md) — трилогия: горизонт PAX в 50 лет, части II и III, перенос решений
 
 ## Решения (ADR)
 - [0000 — шаблон](decisions/0000-template.md)
@@ -35,6 +43,42 @@
 - [0023 — трансзвуковое облако из клубов конденсата](decisions/0023-transonic-cloud-puffs.md)
 - [0024 — звук: микшер, звуки самолёта, речевой информатор (фразы РИ-65)](decisions/0024-sound.md)
 - [0025 — речевой информатор: реальные записи РИ-65](decisions/0025-real-ri65-voice.md)
+- [0026 — вооружение: Р-73, Р-77 и ГШ-30-1 (подвеска, физика ракет, ЗРП, пушка, эффекты, звук)](decisions/0026-weapons-missiles-gun.md)
+- [0027 — РЛС, ГСН и сигнатуры: реалистичное поведение наведения](decisions/0027-radar-guidance.md)
+- [0028 — HUD прицеливания в стиле Ace Combat](decisions/0028-targeting-hud.md)
+- [0029 — бессмертная тестовая цель](decisions/0029-test-drone.md)
+- [0030 — управление v2: раскладка Ace Combat X, ПСМ «как в AC7»](decisions/0030-controls-ace-combat.md)
+- [0031 — HUD: читаемость на экране PSP (подложки, размеры, толщина)](decisions/0031-hud-readability.md)
+- [0032 — производительность: LOD самолётов, дешёвый свет, отсечение, замер кадра](decisions/0032-performance-lod.md)
+- [0033 — противник: смертный бот с ИИ и три уровня сложности](decisions/0033-bot-ai-difficulty.md)
+- [0034 — СПО (RWR): предупреждение об облучении и о ракетах](decisions/0034-rwr.md)
+- [0035 — меню и интерфейс: металлический скин, растровый шрифт, стек экранов над живым ангаром](decisions/0035-menus-ui.md)
+- [0036 — ангар меню: укрытие с запечённым освещением](decisions/0036-hangar-baked-lighting.md)
+- [0037 — кампания, прогресс, ранги и профиль игрока (сохранение)](decisions/0037-campaign-progression-profile.md)
+- [0039 — звания-шильдики, галерея эмблем с достижениями, магазин карточками, быстрый повтор](decisions/0039-rank-plates-emblems.md)
+- [0038 — подвеска задания: загрузка пилонов, масса и сопротивление, конец задания, громкости](decisions/0038-loadout-stores.md)
+- [0040 — море v2: кольца LOD без дыр, спектральная рябь, затенение на CPU](decisions/0040-ocean-v2.md)
+- [0041 — погода и время суток вылета; объёмные облака, сплошная облачность, осадки](decisions/0041-weather-time-of-day.md)
+- [0042 — архипелаг Северного моря: острова и кекуры как игровой рельеф, LOD-куски, программное отсечение](decisions/0042-sea-stacks-terrain.md)
+- [0043 — граница района задания: предупреждение, затем игра разворачивает нос](decisions/0043-arena-boundary.md)
+- [0044 — эффекты у воды: брызги от струй и даунвоша, следы на воде, всплески](decisions/0044-water-effects.md)
+- [0045 — корабли: наземные цели, которые бьют только низко летящих](decisions/0045-ship-targets.md)
+- [0046 — первые настоящие миссии: Северное море на архипелаге](decisions/0046-north-sea-missions.md)
+- [0047 — целевое железо PSP-2000 и новее; планка — AAA-игры PSP своего времени](decisions/0047-target-psp2000-aaa.md)
+- [0048 — сплошная облачность снизу: структура основания, клочья, горизонт](decisions/0048-overcast-from-below.md)
+- [0049 — конвейер кадра (симуляция параллельно GE) и срез работы CPU](decisions/0049-frame-pipeline-cpu-budget.md)
+- [0049 — HUD v3: гибрид «приборный + Ace Combat», растровый шрифт с обводкой, плашки предупреждений](decisions/0049-hud-v3.md)
+- [0050 — постепенный захват: кольцо едет от носа к цели, при захвате — красный ромб](decisions/0050-gradual-lock-on.md)
+- [0051 — рельеф: 16-битные вершины и свет, запечённый в цвет на каждую скалу](decisions/0051-terrain-compact-baked-vertices.md)
+- [0052 — сюжетная кампания: одна страна, 34 миссии (заменён 0053)](decisions/0052-story-campaign-structure.md)
+- [0053 — сюжет: мировая война в записях самописцев (заменён 0054)](decisions/0053-story-world-war-black-boxes.md)
+- [0054 — сюжет v3: войну начал ИИ PAX; трилогия; катсцены — графический роман (предложено)](decisions/0054-story-pax-trilogy-cutscenes.md)
+
+## Ассеты
+- [assets/su35s.md](assets/su35s.md) — Су-35С: референсы, станции, подвижные части, подвеска, шасси
+- [assets/hangar.md](assets/hangar.md) — укрытие для меню: размеры, бюджет, запечённый свет, камеры
+- [assets/ui-art.md](assets/ui-art.md) — картинки локаций и схемы техники
+- [assets/sound.md](assets/sound.md) — звуки, в т.ч. щелчки меню
 
 ## Знания о PSP
 - [psp/gotchas.md](psp/gotchas.md) — ловушки железа, GE, прошивки и тулчейна (с пометкой, где проверено)
@@ -45,8 +89,16 @@
 - [formats/fsm4.md](formats/fsm4.md) — меш с подвижными частями (текущий)
 - [formats/fsm3.md](formats/fsm3.md) — меш, предыдущая версия (история)
 - [formats/ftx2.md](formats/ftx2.md) — текстура (модели и окружение)
+- [formats/ftr2.md](formats/ftr2.md) — меш скалы/острова: 16-битные вершины под запечённый свет (ADR 0051)
+- [formats/ftr1.md](formats/ftr1.md) — меш скалы/острова (заменён FTR2, вход конвертера): дерево кусков с LOD, юбки, ленты, конусы нормалей
 - [formats/wav.md](formats/wav.md) — звук: подмножество WAV, которое читает игра
+- [formats/ffnt.md](formats/ffnt.md) — растровый шрифт меню: метрики, кегли, тексель «заливка + тень»
+- [formats/profile.md](formats/profile.md) — профиль игрока (`profile.dat`): прогресс, ангар, настройки, CRC
 
 ## Ассеты
-- [assets/su35s.md](assets/su35s.md) — Су-35С
+- [assets/su35s.md](assets/su35s.md) — Су-35С (с пилонами)
+- [assets/r73.md](assets/r73.md) — ракета Р-73
+- [assets/r77.md](assets/r77.md) — ракета Р-77
+- [assets/rocks.md](assets/rocks.md) — скалы и острова Северного моря: референсы, бюджет, текстуры
+- [assets/patrol_ship.md](assets/patrol_ship.md) — патрульный корабль «714»
 - [assets/sound.md](assets/sound.md) — звуки и фразы речевого информатора
